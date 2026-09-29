@@ -1,0 +1,14 @@
+# NEVER commit these
+.env
+*.db
+*.db-wal
+*.db-shm
+sweep_session.session
+
+# generated at runtime
+banned_words.txt
+marketer_words.txt
+
+__pycache__/
+*.pyc
+.venv/

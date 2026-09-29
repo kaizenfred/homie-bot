@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Light Rally</title>
+<link rel="stylesheet" href="sl.css">
+<script src="https://telegram.org/js/games.js"></script>
+</head>
+<body>
+<div id="hud"><span>rally <b id="r">0</b></span><span>score <b id="s">0</b></span><span>light <b id="l">3</b></span></div>
+<canvas id="c" width="360" height="460"></canvas>
+
+<div id="msg">
+  <h1>Light Rally</h1>
+  <p>Keep the light in play. Every return speeds it up.<br>
+     Drag to move your paddle. Miss three and it's over.</p>
+  <button id="go">start</button>
+</div>
+
+<script src="sl.js"></script>
+<script>
+const c = document.getElementById("c"), x = c.getContext("2d");
+const W = c.width, H = c.height;
+SL.fit(c);
+
+const keys = SL.input();
+let aimX = W / 2;
+SL.touch(c, p => { aimX = p.x; });
+
+let me, foe, ball, score, rally, lives, over, t, trail;
+
+function reset(full) {
+  if (full) { score = 0; lives = 3; }
+  me  = { x: W / 2, y: H - 26, w: 62, h: 9 };
+  foe = { x: W / 2, y: 26, w: 62, h: 9 };
+  rally = 0; trail = [];
+  serve(1);
+  over = false; t = 0;
+}
+
+function serve(dir) {
+  ball = {
+    x: W / 2, y: H / 2,
+    vx: (Math.random() - .5) * 3.4,
+    vy: dir * 3.6,
+    r: 6, held: 45,
+  };
+}
+
+function drawPaddle(p, warm) {
+  x.save();
+  x.shadowColor = warm ? "#ffb020" : "#7a5fd6";
+  x.shadowBlur = 14;
+  x.fillStyle = warm ? "#ffd75e" : "#8f6fe8";
+  x.beginPath();
+  x.roundRect(p.x - p.w / 2, p.y - p.h / 2, p.w, p.h, 5);
+  x.fill();
+  x.restore();
+}
+
+function step() {
+  t++;
+  x.clearRect(0, 0, W, H);
+
+  // court
+  x.strokeStyle = "#1b1836";
+  x.setLineDash([5, 9]);
+  x.beginPath(); x.moveTo(0, H / 2); x.lineTo(W, H / 2); x.stroke();
+  x.setLineDash([]);
+
+  if (!over) {
+    if (keys.left) aimX -= 7;
+    if (keys.right) aimX += 7;
+    me.x += (Math.max(me.w / 2, Math.min(W - me.w / 2, aimX)) - me.x) * 0.35;
+
+    // opponent: deliberately imperfect, gets sharper as the rally grows
+    const skill = Math.min(0.14 + rally * 0.006, 0.3);
+    const drift = Math.sin(t / 30) * 22;
+    foe.x += ((ball.vy < 0 ? ball.x + drift : W / 2) - foe.x) * skill;
+    foe.x = Math.max(foe.w / 2, Math.min(W - foe.w / 2, foe.x));
+
+    if (ball.held > 0) {
+      ball.held--;
+    } else {
+      ball.x += ball.vx; ball.y += ball.vy;
+      trail.push({ x: ball.x, y: ball.y });
+      if (trail.length > 12) trail.shift();
+
+      if (ball.x < ball.r || ball.x > W - ball.r) {
+        ball.vx *= -1;
+        ball.x = Math.max(ball.r, Math.min(W - ball.r, ball.x));
+      }
+
+      [me, foe].forEach(p => {
+        const near = Math.abs(ball.y - p.y) < p.h / 2 + ball.r;
+        const on = Math.abs(ball.x - p.x) < p.w / 2 + ball.r;
+        const coming = (p === me && ball.vy > 0) || (p === foe && ball.vy < 0);
+        if (near && on && coming) {
+          const off = (ball.x - p.x) / (p.w / 2);
+          ball.vx = off * 4.2;
+          ball.vy *= -1;
+          const speed = Math.min(1.035, 1 + 0.04);
+          ball.vx *= speed; ball.vy *= speed;
+          ball.y = p.y + (p === me ? -1 : 1) * (p.h / 2 + ball.r + 1);
+          rally++;
+          if (p === me) score += 10 + rally;
+        }
+      });
+
+      if (ball.y > H + 20) {
+        lives--;
+        if (lives <= 0) return finish();
+        rally = 0; trail = []; serve(-1);
+      } else if (ball.y < -20) {
+        score += 50 + rally * 5;
+        rally = 0; trail = []; serve(1);
+      }
+    }
+  }
+
+  // trail
+  trail.forEach((p, i) => {
+    x.globalAlpha = (i / trail.length) * 0.4;
+    x.fillStyle = "#ffd75e";
+    x.beginPath(); x.arc(p.x, p.y, ball.r * (i / trail.length), 0, 6.3); x.fill();
+  });
+  x.globalAlpha = 1;
+
+  drawPaddle(foe, false);
+  drawPaddle(me, true);
+
+  x.save();
+  x.shadowColor = "#ffb020"; x.shadowBlur = 20;
+  x.fillStyle = "#fff6d8";
+  x.beginPath(); x.arc(ball.x, ball.y, ball.r, 0, 6.3); x.fill();
+  x.restore();
+
+  if (ball.held > 0 && !over) {
+    x.fillStyle = "#6f6a86";
+    x.font = "12px ui-monospace, monospace";
+    x.textAlign = "center";
+    x.fillText("here it comes", W / 2, H / 2 + 34);
+  }
+
+  document.getElementById("r").textContent = rally;
+  document.getElementById("s").textContent = score;
+  document.getElementById("l").textContent = lives;
+  requestAnimationFrame(step);
+}
+
+function finish() {
+  over = true;
+  SL.submit(score);
+  const m = document.getElementById("msg");
+  m.innerHTML = `<h1>dropped it</h1>
+    <p class="score">${score} points</p>
+    <p>your best run is on the group board.</p>
+    <button id="go">again</button>
+    <button class="ghost" onclick="SL.share()">share score</button>`;
+  m.classList.remove("hide");
+  document.getElementById("go").onclick = start;
+}
+
+function start() {
+  document.getElementById("msg").classList.add("hide");
+  reset(true);
+}
+
+document.getElementById("go").onclick = start;
+reset(true); over = true; step();
+</script>
+</body>
+</html>

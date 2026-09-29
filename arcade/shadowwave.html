@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Shadow Wave</title>
+<link rel="stylesheet" href="sl.css">
+<script src="https://telegram.org/js/games.js"></script>
+</head>
+<body>
+<div id="hud"><span>score <b id="s">0</b></span><span>wave <b id="w">1</b></span><span>light <b id="l">3</b></span></div>
+<canvas id="c" width="360" height="520"></canvas>
+
+<div id="msg">
+  <h1>Shadow Wave</h1>
+  <p>The shadows are coming down. You're the last beacon.<br>
+     Drag to move, tap to fire. Collect the lumens they drop.</p>
+  <button id="go">start</button>
+</div>
+
+<script src="sl.js"></script>
+<script>
+const c = document.getElementById("c"), x = c.getContext("2d");
+const W = c.width, H = c.height;
+SL.fit(c);
+
+const keys = SL.input();
+let aimX = W / 2, wantFire = false;
+SL.touch(c, p => { aimX = p.x; }, () => { wantFire = true; });
+
+let beacon, shots, foes, motes, dust, wave, score, lives, over, dir, drop, cool, t;
+
+function reset() {
+  beacon = { x: W / 2, y: H - 34, w: 26, cool: 0 };
+  shots = []; foes = []; motes = []; dust = [];
+  wave = 1; score = 0; lives = 3; over = false; t = 0;
+  spawn();
+}
+
+function spawn() {
+  foes = [];
+  const cols = Math.min(4 + wave, 8), rows = Math.min(2 + Math.floor(wave / 2), 5);
+  const gapX = 40, gapY = 34, left = (W - (cols - 1) * gapX) / 2;
+  for (let r = 0; r < rows; r++)
+    for (let col = 0; col < cols; col++)
+      foes.push({
+        x: left + col * gapX, y: 56 + r * gapY,
+        hp: r === 0 ? 2 : 1, r: 11, phase: Math.random() * 6.28,
+      });
+  dir = 1; drop = 0; cool = 0;
+}
+
+/* --- drawing ------------------------------------------------------------ */
+
+function shadow(f) {
+  // a drifting blot with a cold core — nothing borrowed, all curves
+  const wob = Math.sin(t / 14 + f.phase) * 2;
+  const g = x.createRadialGradient(f.x, f.y, 1, f.x, f.y, f.r + 5);
+  g.addColorStop(0, f.hp > 1 ? "#8f6fe8" : "#5b3ea8");
+  g.addColorStop(1, "rgba(20,12,45,0)");
+  x.fillStyle = g;
+  x.beginPath();
+  x.ellipse(f.x, f.y, f.r + 3 + wob, f.r + wob, 0, 0, 6.3);
+  x.fill();
+  x.fillStyle = "#0b0b16";
+  x.beginPath();
+  x.arc(f.x - 3.5, f.y - 1, 1.9, 0, 6.3);
+  x.arc(f.x + 3.5, f.y - 1, 1.9, 0, 6.3);
+  x.fill();
+}
+
+function drawBeacon() {
+  const b = beacon;
+  x.save();
+  x.shadowColor = "#ffb020"; x.shadowBlur = 18;
+  x.fillStyle = "#ffd75e";
+  x.beginPath();
+  x.moveTo(b.x, b.y - 13);
+  x.lineTo(b.x + b.w / 2, b.y + 9);
+  x.lineTo(b.x, b.y + 4);
+  x.lineTo(b.x - b.w / 2, b.y + 9);
+  x.closePath(); x.fill();
+  x.restore();
+  // beam
+  const g = x.createLinearGradient(b.x, b.y - 13, b.x, b.y - 60);
+  g.addColorStop(0, "rgba(255,215,94,.22)");
+  g.addColorStop(1, "rgba(255,215,94,0)");
+  x.fillStyle = g;
+  x.beginPath(); x.moveTo(b.x - 5, b.y - 13);
+  x.lineTo(b.x + 5, b.y - 13); x.lineTo(b.x + 20, b.y - 62);
+  x.lineTo(b.x - 20, b.y - 62); x.closePath(); x.fill();
+}
+
+function stars() {
+  x.fillStyle = "#15132a";
+  for (let i = 0; i < 34; i++) {
+    const sx = (i * 97 + (t * 0.25 + i * 13)) % W;
+    const sy = (i * 61 + t * 0.4) % H;
+    x.fillRect(sx, sy, 1.6, 1.6);
+  }
+}
+
+/* --- loop --------------------------------------------------------------- */
+
+function step() {
+  t++;
+  x.clearRect(0, 0, W, H);
+  stars();
+
+  if (!over) {
+    // move
+    if (keys.left) aimX -= 6;
+    if (keys.right) aimX += 6;
+    beacon.x += (Math.max(16, Math.min(W - 16, aimX)) - beacon.x) * 0.3;
+
+    if (beacon.cool > 0) beacon.cool--;
+    if ((keys.fire || wantFire) && beacon.cool === 0) {
+      shots.push({ x: beacon.x, y: beacon.y - 14 });
+      beacon.cool = 11;
+    }
+    wantFire = false;
+
+    // shots
+    shots.forEach(s => s.y -= 8);
+    shots = shots.filter(s => s.y > -10);
+
+    // formation
+    const speed = 0.28 + wave * 0.07 + (1 - foes.length / 30) * 0.5;
+    let edge = false;
+    foes.forEach(f => {
+      f.x += dir * speed;
+      if (f.x < 16 || f.x > W - 16) edge = true;
+    });
+    if (edge) { dir *= -1; foes.forEach(f => f.y += 11); }
+
+    // they spit shadow back
+    cool--;
+    if (cool <= 0 && foes.length) {
+      const f = foes[(Math.random() * foes.length) | 0];
+      dust.push({ x: f.x, y: f.y + 10, vy: 2.4 + wave * 0.15 });
+      cool = Math.max(24, 70 - wave * 4);
+    }
+    dust.forEach(d => d.y += d.vy);
+    dust = dust.filter(d => d.y < H + 10);
+
+    // hits
+    shots.forEach(s => {
+      foes.forEach(f => {
+        if (!f.dead && Math.hypot(s.x - f.x, s.y - f.y) < f.r + 3) {
+          s.y = -99; f.hp--;
+          if (f.hp <= 0) {
+            f.dead = true;
+            score += 10 * wave;
+            for (let i = 0; i < 3; i++)
+              motes.push({ x: f.x, y: f.y, vx: (Math.random() - .5) * 2,
+                           vy: 1 + Math.random(), life: 90 });
+          }
+        }
+      });
+    });
+    foes = foes.filter(f => !f.dead);
+
+    // lumens drift down, catch them
+    motes.forEach(m => { m.x += m.vx; m.y += m.vy; m.life--; });
+    motes = motes.filter(m => {
+      if (m.life <= 0 || m.y > H + 8) return false;
+      if (Math.hypot(m.x - beacon.x, m.y - beacon.y) < 18) { score += 5; return false; }
+      return true;
+    });
+
+    // taking damage
+    const hit = dust.find(d => Math.hypot(d.x - beacon.x, d.y - beacon.y) < 15);
+    if (hit) {
+      dust = dust.filter(d => d !== hit);
+      lives--;
+      if (lives <= 0) return finish();
+    }
+    if (foes.some(f => f.y > H - 60)) { lives = 0; return finish(); }
+
+    if (!foes.length) { wave++; score += 50; spawn(); }
+  }
+
+  // draw
+  foes.forEach(shadow);
+  x.fillStyle = "#7a5fd6";
+  dust.forEach(d => { x.beginPath(); x.arc(d.x, d.y, 3.4, 0, 6.3); x.fill(); });
+  x.fillStyle = "#ffd75e";
+  shots.forEach(s => x.fillRect(s.x - 1.5, s.y, 3, 11));
+  motes.forEach(m => {
+    x.globalAlpha = Math.min(1, m.life / 40);
+    x.beginPath(); x.arc(m.x, m.y, 2.6, 0, 6.3); x.fill();
+    x.globalAlpha = 1;
+  });
+  if (!over) drawBeacon();
+
+  document.getElementById("s").textContent = score;
+  document.getElementById("w").textContent = wave;
+  document.getElementById("l").textContent = lives;
+  requestAnimationFrame(step);
+}
+
+function finish() {
+  over = true;
+  SL.submit(score);
+  const m = document.getElementById("msg");
+  m.innerHTML = `<h1>the shadows won</h1>
+    <p class="score">${score} points · wave ${wave}</p>
+    <p>every run banks your best score on the group board.</p>
+    <button id="go">again</button>
+    <button class="ghost" onclick="SL.share()">share score</button>`;
+  m.classList.remove("hide");
+  document.getElementById("go").onclick = start;
+}
+
+function start() {
+  document.getElementById("msg").classList.add("hide");
+  reset();
+}
+
+document.getElementById("go").onclick = start;
+reset(); over = true; step();
+</script>
+</body>
+</html>
