@@ -133,10 +133,11 @@ async def reply(chat_id, bot_name, instruction):
             messages=[{"role": "user", "content": prompt}],
         )
         text = "".join(b.text for b in resp.content if b.type == "text").strip()
-        return text or None
+        return text or random.choice(FALLBACKS)
     except Exception:
-        log.exception("persona call failed")
-        return None
+        # Silence looks identical to "the bot is broken". Say something.
+        log.exception("persona call failed — falling back to a canned line")
+        return random.choice(FALLBACKS)
 
 
 # --- convenience wrappers ---------------------------------------------------

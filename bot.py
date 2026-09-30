@@ -6,6 +6,7 @@ Run with:  python bot.py
 import datetime as dt
 import logging
 import random
+import re
 import sys
 import time
 
@@ -44,6 +45,38 @@ def is_admin(update: Update) -> bool:
     if user.id in config.ADMIN_IDS:
         return True
     return bool(user.username) and user.username.lower() in config.ADMIN_USERNAMES
+
+
+_NAME_RE = None
+
+
+def addressed(ctx, text) -> bool:
+    """Is Homie being spoken to?
+
+    Matches his @handle AND his name. The two differ — the handle is
+    @SpreadLightBot, the name is "homie" — and people only ever type the name.
+    """
+    global _NAME_RE
+    if not text:
+        return False
+    low = text.lower()
+    handle = (ctx.bot.username or "").lower()
+    if handle and f"@{handle}" in low:
+        return True
+    if _NAME_RE is None:
+        names = set(config.BOT_NICKNAMES)
+        if ctx.bot.first_name:
+            names.add(ctx.bot.first_name.lower())
+        names = {re.escape(n) for n in names if n}
+        # "homie" is ordinary slang in this community. A possessive or
+        # determiner in front of it means someone is talking about a mate,
+        # not to the bot — "my homie just aped in" is not a question for him.
+        _NAME_RE = (re.compile(
+            r"(?<![a-z0-9])(?<!my )(?<!your )(?<!his )(?<!her )(?<!our )"
+            r"(?<!their )(?<!that )(?<!some )(?<!a )(?<!the )"
+            r"(?:" + "|".join(names) + r")(?![a-z0-9])")
+            if names else re.compile(r"(?!x)x"))
+    return bool(_NAME_RE.search(low))
 
 
 def display_name(user) -> str:
@@ -513,8 +546,7 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except Exception:
             log.exception("community layer failed")
 
-    username = (ctx.bot.username or "").lower()
-    mentioned = f"@{username}" in msg.text.lower()
+    mentioned = addressed(ctx, msg.text)
     replied_to_bot = bool(
         msg.reply_to_message
         and msg.reply_to_message.from_user

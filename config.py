@@ -64,6 +64,11 @@ MAIN_CHAT_ID = _int("MAIN_CHAT_ID", 0)        # negative number, e.g. -100123456
 ADMIN_IDS = _id_list("ADMIN_IDS")
 ADMIN_USERNAMES = _name_list("ADMIN_USERNAMES")   # e.g. KaizenFresh
 
+# Names Homie answers to in chat, on top of his @handle and display name.
+# Members type "homie", never "@SpreadLightBot" — without this he never
+# realises he's being spoken to.
+BOT_NICKNAMES = _name_list("BOT_NICKNAMES") or {"homie"}
+
 # --- Persona / conversation -------------------------------------------------
 ANTHROPIC_API_KEY = _raw("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL = _raw("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
