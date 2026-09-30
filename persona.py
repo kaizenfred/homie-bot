@@ -60,6 +60,22 @@ def _voice():
     return "You are the founder of SpreadLight. Talk casually and warmly."
 
 
+def _knowledge():
+    """Crypto onboarding reference, read fresh like voice.md.
+
+    Missing is not fatal: without it Homie still talks, he just stops being
+    useful on wallets and the buy flow and should say so rather than guess.
+    """
+    path = pathlib.Path(config.KNOWLEDGE_FILE)
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+    log.warning("%s not found — crypto answers will be thin",
+                config.KNOWLEDGE_FILE)
+    return ("You do not have the crypto onboarding notes loaded. If someone "
+            "asks how to buy, tell them to run /howtobuy rather than "
+            "improvising the steps.")
+
+
 def system_prompt():
     facts = f"""
 PROJECT FACTS you may reference (do not go beyond these):
@@ -86,8 +102,14 @@ PROJECT FACTS you may reference (do not go beyond these):
   sold, or swapped for $LIGHT. Never suggest otherwise.
 - Official site: {config.WEBSITE_URL}
 - Official presale link: {config.PRESALE_URL}
+- People arrive knowing nothing about crypto. Walking someone from "I have a
+  bank account" to "I contributed" is core work, not a distraction — the
+  onboarding notes below are there for exactly that. /howtobuy posts the
+  steps as a card if they'd rather read it than chat.
 """
-    return _voice() + "\n" + facts + "\n" + GUARDRAILS
+    return (_voice() + "\n" + facts + "\n"
+            + "\n--- CRYPTO ONBOARDING NOTES ---\n" + _knowledge()
+            + "\n" + GUARDRAILS)
 
 
 def _get_client():

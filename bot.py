@@ -99,6 +99,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
     await update.effective_message.reply_text(
         "yo, I'm Homie ✨ I hang out here.\n\n"
+        "/howtobuy — never bought crypto? start here\n"
         "/presale — progress and countdown\n"
         "/ca — official contract addresses\n"
         "/stats — community numbers\n"
@@ -133,6 +134,62 @@ async def cmd_ca(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "\n".join(lines), parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
     )
+
+
+async def cmd_howtobuy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Fixed text, never AI.
+
+    The buy flow moves real money, so it is not generated. A model that
+    invents a step here costs somebody their BNB. Homie can talk around it
+    conversationally — knowledge.md is loaded for that — but the canonical
+    steps live in this string and nowhere else.
+    """
+    text = (
+        "🪜 <b>how to get $LIGHT</b>\n"
+        "never done this before? this is the whole thing, in order.\n\n"
+
+        "<b>1 · get some BNB</b>\n"
+        "any big exchange that lists BNB — binance, coinbase, kraken, mexc. "
+        "you'll need ID verification, which can take a day or two, so don't "
+        "start this in the last hour of the sale.\n\n"
+
+        "<b>2 · make a wallet</b>\n"
+        "metamask or trust wallet, both free. set the network to "
+        "<b>BNB Smart Chain</b>.\n"
+        "it shows you 12 or 24 recovery words — write them on paper, keep "
+        "them offline. never type them into anything, never photograph them, "
+        "never send them to anyone. not to me, not to the founder, not to "
+        "\"support\". anyone asking is robbing you.\n\n"
+
+        "<b>3 · send the BNB to your wallet</b>\n"
+        "this is the step that loses people money, so go slow:\n"
+        "• the network must say <b>BNB Smart Chain</b> / <b>BEP20</b>. not "
+        "BEP2, not ethereum, not ERC-20\n"
+        "• some exchanges don't offer BEP20 for BNB. if yours doesn't, use "
+        "one that does — don't pick the closest-looking option\n"
+        "• copy-paste your address, never retype it\n"
+        "• nervous? send a tiny test amount first. costs pennies\n"
+        "• leave ~0.002 BNB spare for gas, or you can't afford the fee to "
+        "contribute\n\n"
+
+        "<b>4 · contribute</b>\n"
+        "open the presale link from /ca, connect your wallet, enter an "
+        "amount, confirm. min 0.05 BNB, max 1 BNB per wallet.\n\n"
+
+        "<b>5 · claim when it's over</b>\n"
+        "tokens don't land straight away. after the sale closes and gets "
+        "finalised, come back to the same pinksale page and claim. same "
+        "wallet, same page — there is no separate claim site, and anyone "
+        "sending you one is scamming you.\n\n"
+
+        "if we don't hit the 5 BNB soft cap, the sale fails and you withdraw "
+        "your BNB back through pinksale. your money isn't trapped.\n\n"
+
+        "⚠️ the team never DMs first. one presale link, it's in /ca. "
+        "stuck anywhere? ask in here — that's what we're for ✨"
+    )
+    await update.effective_message.reply_text(
+        text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 
 async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -940,6 +997,9 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("presale", cmd_presale))
     app.add_handler(CommandHandler("ca", cmd_ca))
+    app.add_handler(CommandHandler("howtobuy", cmd_howtobuy))
+    app.add_handler(CommandHandler("buy", cmd_howtobuy))       # people type this
+    app.add_handler(CommandHandler("wallet", cmd_howtobuy))    # and this
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("ask", cmd_ask))
     app.add_handler(CommandHandler("sweep", cmd_sweep))

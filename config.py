@@ -73,6 +73,11 @@ BOT_NICKNAMES = _name_list("BOT_NICKNAMES") or {"homie"}
 ANTHROPIC_API_KEY = _raw("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL = _raw("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
 VOICE_FILE = _raw("VOICE_FILE", "voice.md")
+# Crypto onboarding reference — how to buy, wallets, networks, safety.
+# Loaded fresh on every reply, same as voice.md, so edits go live without a
+# restart. Kept separate from voice.md because one is how he talks and the
+# other is what he knows; they change for different reasons.
+KNOWLEDGE_FILE = _raw("KNOWLEDGE_FILE", "knowledge.md")
 
 # chance (0-1) the bot jumps into a normal message it wasn't tagged in
 AMBIENT_REPLY_CHANCE = _float("AMBIENT_REPLY_CHANCE", 0.12)
