@@ -89,7 +89,7 @@ PRESALE_END=2026-11-04T13:40:00+00:00
 
 SHIELD_ENABLED=true
 ALLOWED_DOMAINS=spreadlight.io,pinksale.finance,bscscan.com,pancakeswap.finance
-ALLOWED_TG=
+ALLOWED_TG=SpreadLightToken
 EXTRA_ALLOWED_ADDRESSES=
 PROTECTED_NAMES=kaizenfred
 

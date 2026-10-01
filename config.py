@@ -122,7 +122,11 @@ ALLOWED_DOMAINS = _name_list("ALLOWED_DOMAINS") or {
 }
 # t.me handles that may be linked (your group, your channel). The bot's own
 # handle is always allowed.
-ALLOWED_TG = _name_list("ALLOWED_TG")
+#
+# This MUST include your own group. Left empty, the shield treats a link to
+# the community's own invite as a scam link: it deletes the message and gives
+# the member a strike for sharing the group they are standing in.
+ALLOWED_TG = _name_list("ALLOWED_TG") or {"spreadlighttoken"}
 # any other 0x address found in a message gets deleted
 EXTRA_ALLOWED_ADDRESSES = _name_list("EXTRA_ALLOWED_ADDRESSES")
 # handles an impersonator would copy. ADMIN_USERNAMES are always included.
