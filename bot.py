@@ -11,11 +11,13 @@ import sys
 import time
 
 from telegram import (
-    ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup, Update,
+    ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup,
+    InlineQueryResultGame, Update,
 )
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import (
     Application, CallbackQueryHandler, CommandHandler, ContextTypes,
+    InlineQueryHandler,
     MessageHandler, filters,
 )
 
@@ -913,6 +915,27 @@ async def job_icebreaker(ctx: ContextTypes.DEFAULT_TYPE):
 
 # --- wiring -----------------------------------------------------------------
 
+async def on_inline(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Answer @SpreadLightBot in any chat with the three games.
+
+    Registering a game in BotFather REQUIRES the bot to be in inline mode,
+    so inline is on whether or not we use it. An inline-mode bot with no
+    handler shows a spinner and then nothing, which looks broken — so it
+    answers with the games, which is the one thing inline is good for here:
+    sharing a cabinet into a chat the bot isn't even in.
+    """
+    if not config.GAMES_ENABLED:
+        return
+    results = [
+        InlineQueryResultGame(id=short, game_short_name=short)
+        for short in arcade_server.GAMES
+    ]
+    try:
+        await update.inline_query.answer(results, cache_time=60)
+    except Exception:
+        log.exception("inline answer failed")
+
+
 async def on_arcade_score(claim, score):
     """Called by the arcade web server when a run finishes."""
     app = _APP
@@ -1015,6 +1038,7 @@ def main():
 
     if config.GAMES_ENABLED or config.POINTS_ENABLED:
         community.register(app)
+    app.add_handler(InlineQueryHandler(on_inline))
     app.add_handler(CallbackQueryHandler(on_arcade_pick, pattern=r"^arc:"))
     app.add_handler(CallbackQueryHandler(on_game_launch, game_pattern=r".*"))
 
