@@ -137,6 +137,11 @@ cat > /etc/systemd/system/homie.service <<'SVCEOF'
 Description=Homie - SpreadLight community bot
 After=network-online.target
 Wants=network-online.target
+# Restart=always is a lie without this. systemd's default rate limit is 5
+# starts in 10s; exceed it and the unit goes to "failed" and is never
+# restarted again. A transient crash loop at 3am then leaves the bot dead
+# until a human notices. 0 disables the limit: keep retrying, forever.
+StartLimitIntervalSec=0
 
 [Service]
 User=homie
