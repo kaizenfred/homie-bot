@@ -83,6 +83,14 @@ def play_url(user_id, chat_id, game, message_id=None, inline_id=None):
 
 # --- web server -------------------------------------------------------------
 
+# Binary types must not be given a charset — aiohttp would label a PNG as
+# utf-8 text and browsers would refuse to render it.
+TEXT_TYPES = {"html": "text/html", "js": "application/javascript",
+              "css": "text/css", "svg": "image/svg+xml"}
+BINARY_TYPES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                "gif": "image/gif", "webp": "image/webp", "ico": "image/x-icon"}
+
+
 async def _serve_file(request):
     name = request.match_info["name"]
     if "/" in name or ".." in name:
@@ -90,10 +98,27 @@ async def _serve_file(request):
     path = ARCADE_DIR / name
     if not path.is_file():
         raise web.HTTPNotFound()
-    ctype = {"html": "text/html", "js": "application/javascript",
-             "css": "text/css"}.get(name.rsplit(".", 1)[-1], "text/plain")
+    ext = name.rsplit(".", 1)[-1].lower()
+    if ext in BINARY_TYPES:
+        return web.Response(body=path.read_bytes(),
+                            content_type=BINARY_TYPES[ext])
     return web.Response(body=path.read_bytes(),
-                        content_type=ctype, charset="utf-8")
+                        content_type=TEXT_TYPES.get(ext, "text/plain"),
+                        charset="utf-8")
+
+
+async def _index(request):
+    """Something human at the root.
+
+    The bare domain used to 404, which looks identical to a broken deploy
+    when you are checking whether the arcade came up. This is also the page
+    a shared play.spreadlight.io link lands on.
+    """
+    path = ARCADE_DIR / "index.html"
+    if not path.is_file():
+        return web.Response(text="arcade is up", content_type="text/plain")
+    return web.Response(body=path.read_bytes(),
+                        content_type="text/html", charset="utf-8")
 
 
 async def _post_score(request):
@@ -129,6 +154,7 @@ async def start_server(on_score):
     app = web.Application()
     app["on_score"] = on_score
     app.add_routes([
+        web.get("/", _index),
         web.get("/arcade/{name}", _serve_file),
         web.post("/score", _post_score),
         web.get("/health", lambda r: web.Response(text="ok")),

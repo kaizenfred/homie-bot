@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>SpreadLight Arcade</title>
+<link rel="icon" href="/arcade/lumenrun.png">
+<link rel="stylesheet" href="/arcade/sl.css">
+<style>
+  /* This page scrolls and stacks, unlike the games, which are fixed to the
+     viewport — so it opts out of the shell's centred, overflow-hidden body. */
+  html, body { height: auto; overflow: auto; }
+  body {
+    justify-content: flex-start; padding: 0; display: block;
+    min-height: 100%;
+    /* The shell pins its horizon glow to 118% of the VIEWPORT, which leaves a
+       visible seam once a page scrolls past one screen. Fixed attachment
+       keeps the city below the fold wherever you are on the page. */
+    background-attachment: fixed;
+  }
+
+  .wrap { max-width: 760px; margin: 0 auto; padding: 56px 20px 72px; }
+
+  .kicker {
+    font-size: 11px; letter-spacing: .34em; text-transform: uppercase;
+    color: var(--neon); text-shadow: 0 0 12px rgba(25,230,255,.45);
+  }
+  h1 {
+    margin: 10px 0 0; font-size: clamp(30px, 9vw, 52px); letter-spacing: .04em;
+    color: var(--light);
+    text-shadow: -2px 0 0 rgba(255,46,136,.8), 2px 0 0 rgba(25,230,255,.8),
+                 0 0 30px rgba(255,201,60,.35);
+  }
+  .sub { margin-top: 14px; color: var(--dim); font-size: 14px; line-height: 1.7; max-width: 46ch; }
+  .sub b { color: var(--ink); font-weight: 600; }
+
+  .rack { margin-top: 42px; display: grid; gap: 16px; }
+  @media (min-width: 640px) { .rack { grid-template-columns: repeat(3, 1fr); } }
+
+  .cab {
+    display: block; text-decoration: none; color: inherit;
+    border: 1px solid var(--grid); background: var(--deck);
+    overflow: hidden; position: relative;
+    clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+    transition: border-color .18s ease, transform .18s ease;
+  }
+  .cab:hover, .cab:focus-visible {
+    border-color: rgba(25,230,255,.6);
+    transform: translateY(-3px);
+    outline: none;
+  }
+  .cab:focus-visible { box-shadow: 0 0 0 2px var(--neon); }
+  /* The cover already carries its own title, so showing the whole thing and
+     then repeating the name underneath says it twice. Cropping to the lower
+     band keeps the artwork and lets the card's own typography name it. */
+  .cab img {
+    display: block; width: 100%; height: auto;
+    aspect-ratio: 16 / 7;
+    object-fit: cover;
+    object-position: 50% 88%;
+  }
+  .cab .meta { padding: 13px 15px 16px; }
+  .cab .name { color: var(--light); font-size: 14px; letter-spacing: .06em; }
+  .cab .line { color: var(--dim); font-size: 12px; margin-top: 5px; line-height: 1.5; }
+
+  .foot {
+    margin-top: 48px; padding-top: 22px; border-top: 1px solid var(--grid);
+    color: var(--dim); font-size: 12px; line-height: 1.8;
+  }
+  .foot a { color: var(--neon); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cab { transition: none; }
+    .cab:hover { transform: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="kicker">SpreadLight</p>
+  <h1>ARCADE</h1>
+  <p class="sub">
+    Three games, sixty seconds each. Beat your own best and you pick up
+    <b>Lumens</b> — the community's score, not a token. Scores only count when
+    you open a game from the SpreadLight group, so your run lands under your name.
+  </p>
+
+  <div class="rack">
+    <a class="cab" href="/arcade/shadowwave.html">
+      <img src="/arcade/shadowwave.png" alt="Shadow Wave" width="640" height="360">
+      <div class="meta">
+        <div class="name">Shadow Wave</div>
+        <div class="line">Thread the gaps. Don't get caught in the dark.</div>
+      </div>
+    </a>
+    <a class="cab" href="/arcade/lumenrun.html">
+      <img src="/arcade/lumenrun.png" alt="Lumen Run" width="640" height="360">
+      <div class="meta">
+        <div class="name">Lumen Run</div>
+        <div class="line">Run, jump, collect the light.</div>
+      </div>
+    </a>
+    <a class="cab" href="/arcade/lightrally.html">
+      <img src="/arcade/lightrally.png" alt="Light Rally" width="640" height="360">
+      <div class="meta">
+        <div class="name">Light Rally</div>
+        <div class="line">Keep the light in play.</div>
+      </div>
+    </a>
+  </div>
+
+  <p class="foot">
+    Open from the group with <b>/play</b> to have your score counted.<br>
+    <a href="https://spreadlight.io">spreadlight.io</a>
+  </p>
+</div>
+</body>
+</html>
