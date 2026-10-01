@@ -41,6 +41,10 @@ log "cloning $REPO_URL"
 rm -rf /opt/homie/app
 git clone --depth 1 "$REPO_URL" /opt/homie/app           >>"$LOG" 2>&1
 cd /opt/homie/app
+# The tree ends up owned by the homie service user, so a later `git pull`
+# from a root shell would fail with "detected dubious ownership" and do
+# nothing. Allow it now, while we are already root.
+git config --global --add safe.directory /opt/homie/app  >>"$LOG" 2>&1 || true
 
 log "building venv + installing deps (this is the slow part)"
 python3 -m venv .venv                                    >>"$LOG" 2>&1

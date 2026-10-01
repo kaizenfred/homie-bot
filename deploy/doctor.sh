@@ -86,6 +86,15 @@ if dmesg 2>/dev/null | grep -qi 'killed process.*python'; then
 fi
 
 line "repair"
+# Running git as root in a homie-owned repo fails with "dubious ownership"
+# and the pull silently does nothing. Set once, here, so every later update
+# works from a root shell.
+git config --global --add safe.directory "$APP" 2>/dev/null || true
+# A previous root-run pull may have left files root-owned in a tree the
+# service user has to write to.
+chown -R homie:homie "$APP" 2>/dev/null || true
+chmod 600 "$ENV" 2>/dev/null || true
+
 if grep -q 'StartLimitIntervalSec=0' "$UNIT" 2>/dev/null; then
     echo "  unit already has the start-limit fix"
 else
