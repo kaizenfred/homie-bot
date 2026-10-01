@@ -56,13 +56,13 @@ function shadow(f) {
   // a drifting blot with a cold core — nothing borrowed, all curves
   const wob = Math.sin(t / 14 + f.phase) * 2;
   const g = x.createRadialGradient(f.x, f.y, 1, f.x, f.y, f.r + 5);
-  g.addColorStop(0, f.hp > 1 ? "#8f6fe8" : "#5b3ea8");
+  g.addColorStop(0, f.hp > 1 ? "#b86aff" : "#6a2fb5");
   g.addColorStop(1, "rgba(20,12,45,0)");
   x.fillStyle = g;
   x.beginPath();
   x.ellipse(f.x, f.y, f.r + 3 + wob, f.r + wob, 0, 0, 6.3);
   x.fill();
-  x.fillStyle = "#0b0b16";
+  x.fillStyle = "#0a0a1f";
   x.beginPath();
   x.arc(f.x - 3.5, f.y - 1, 1.9, 0, 6.3);
   x.arc(f.x + 3.5, f.y - 1, 1.9, 0, 6.3);
@@ -72,8 +72,8 @@ function shadow(f) {
 function drawBeacon() {
   const b = beacon;
   x.save();
-  x.shadowColor = "#ffb020"; x.shadowBlur = 18;
-  x.fillStyle = "#ffd75e";
+  x.shadowColor = "#ffa52b"; x.shadowBlur = 18;
+  x.fillStyle = "#ffc93c";
   x.beginPath();
   x.moveTo(b.x, b.y - 13);
   x.lineTo(b.x + b.w / 2, b.y + 9);
@@ -92,7 +92,7 @@ function drawBeacon() {
 }
 
 function stars() {
-  x.fillStyle = "#15132a";
+  x.fillStyle = "#141a3c";
   for (let i = 0; i < 34; i++) {
     const sx = (i * 97 + (t * 0.25 + i * 13)) % W;
     const sy = (i * 61 + t * 0.4) % H;
@@ -182,9 +182,9 @@ function step() {
 
   // draw
   foes.forEach(shadow);
-  x.fillStyle = "#7a5fd6";
+  x.fillStyle = "#9d4edd";
   dust.forEach(d => { x.beginPath(); x.arc(d.x, d.y, 3.4, 0, 6.3); x.fill(); });
-  x.fillStyle = "#ffd75e";
+  x.fillStyle = "#ffc93c";
   shots.forEach(s => x.fillRect(s.x - 1.5, s.y, 3, 11));
   motes.forEach(m => {
     x.globalAlpha = Math.min(1, m.life / 40);

@@ -15,14 +15,18 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 W, H = 640, 360
 SS = 2                      # supersample, then downscale — cheap antialiasing
 
-# straight from arcade/sl.css
-BG      = (7, 7, 13)
-INK     = (246, 243, 232)
-DIM     = (111, 106, 134)
-LIGHT   = (255, 215, 94)
-GLOW    = (255, 176, 32)
-SHADOW  = (91, 62, 168)
-GOOD    = (87, 224, 160)
+# straight from arcade/sl.css — cold is the machine, warm is you
+BG      = (4, 3, 12)        # --void
+DECK    = (10, 10, 31)      # --deck
+GRID    = (27, 31, 74)      # --grid
+NEON    = (25, 230, 255)    # --neon   the city, UI chrome
+HOT     = (255, 46, 136)    # --hot    danger
+SHADOW  = (157, 78, 221)    # --volt   the shadow mass
+LIGHT   = (255, 201, 60)    # --light  you
+GLOW    = (255, 165, 43)    # the light's halo
+GOOD    = (43, 255, 207)    # --mint   pickups
+INK     = (232, 244, 255)   # --ink
+DIM     = (90, 106, 154)    # --dim
 
 MONO  = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"
 MONOB = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"
@@ -46,14 +50,47 @@ def tracked_width(d, text, f, track=0):
 
 
 def base():
-    """Near-black canvas with the faint vertical lift the games have."""
+    """Night, with the city glowing just past the bottom edge.
+
+    Matches the radial-gradient on body in sl.css: the source of light is
+    always below the frame, which is what makes the dark feel like a place
+    rather than an empty background.
+    """
     img = Image.new("RGB", (W * SS, H * SS), BG)
     d = ImageDraw.Draw(img)
+    cx, cy = W * SS * 0.5, H * SS * 1.18
+    rmax = H * SS * 0.95
     for y in range(H * SS):
-        t = y / (H * SS)
-        k = int(10 * (1 - t) ** 2)
-        d.line([(0, y), (W * SS, y)], fill=(BG[0] + k, BG[1] + k, BG[2] + k + 2))
+        for_x = []
+        dy = (y - cy) / rmax
+        t = min(1.0, abs(dy))
+        k = (1 - t) ** 2.2
+        d.line([(0, y), (W * SS, y)],
+               fill=(int(BG[0] + 16 * k), int(BG[1] + 22 * k), int(BG[2] + 61 * k)))
     return img
+
+
+def scanlines(img, period=3, strength=58):
+    """CRT line structure, same 2px-on/1px-off rhythm as sl.css."""
+    d = ImageDraw.Draw(img)
+    for y in range(0, H * SS, period * SS):
+        for yy in range(y, min(y + SS, H * SS)):
+            d.line([(0, yy), (W * SS, yy)], fill=(0, 0, 0))
+    return Image.blend(img, img.filter(ImageFilter.GaussianBlur(0.4 * SS)), 0.35)
+
+
+def horizon(d, y, colour=NEON, rows=7):
+    """A perspective grid receding to the vanishing point."""
+    for i in range(rows):
+        t = i / rows
+        yy = y + (H - y) * (t ** 1.9)
+        a = 0.30 * (1 - t)
+        d.line([(0, yy * SS), (W * SS, yy * SS)],
+               fill=tuple(int(c * a) for c in colour), width=max(1, int(1.5 * SS)))
+    for i in range(-9, 10):
+        a = 0.22 * (1 - abs(i) / 10)
+        d.line([(W * SS / 2 + i * 13 * SS, y * SS), (W * SS / 2 + i * 150 * SS, H * SS)],
+               fill=tuple(int(c * a) for c in colour), width=max(1, int(1.2 * SS)))
 
 
 def lay(img, art, radius=18):
@@ -71,27 +108,33 @@ def lay(img, art, radius=18):
 
 def finish(img, title, kicker="SPREADLIGHT ARCADE"):
     d = ImageDraw.Draw(img)
-    f_kick = font(MONO, 13)
+    f_kick = font(MONO, 12)
     f_title = font(MONOB, 40)
 
-    tracked(d, (46 * SS, 44 * SS), kicker, f_kick, DIM, track=3)
-    tracked(d, (44 * SS, 70 * SS), title.upper(), f_title, LIGHT, track=2)
+    tracked(d, (46 * SS, 44 * SS), kicker, f_kick, NEON, track=4)
 
-    # underline tying title to art, fading out like a light trail
+    # The one loud moment, matching #msg h1 in sl.css: a misconverged CRT,
+    # magenta bleeding left and cyan right from under the amber. Drawn as
+    # three offset passes because that is literally what text-shadow does.
+    tx, ty = 44 * SS, 68 * SS
+    tracked(d, (tx - 2 * SS, ty), title.upper(), f_title, HOT, track=2)
+    tracked(d, (tx + 2 * SS, ty), title.upper(), f_title, NEON, track=2)
+    tracked(d, (tx, ty), title.upper(), f_title, LIGHT, track=2)
+
+    # rule under the title, fading like a signal losing power
     y = 126 * SS
     tw = tracked_width(d, title.upper(), f_title, 2)
     steps = 60
     for i in range(steps):
         t = i / steps
-        x0 = 46 * SS + tw * t
-        x1 = 46 * SS + tw * (t + 1 / steps)
-        a = 1 - t
+        x0, x1 = 46 * SS + tw * t, 46 * SS + tw * (t + 1 / steps)
+        a = (1 - t) ** 1.4
         d.line([(x0, y), (x1, y)],
-               fill=(int(GLOW[0] * a + BG[0] * (1 - a)),
-                     int(GLOW[1] * a + BG[1] * (1 - a)),
-                     int(GLOW[2] * a + BG[2] * (1 - a))),
+               fill=(int(GLOW[0] * a + BG[0]), int(GLOW[1] * a + BG[1]),
+                     int(GLOW[2] * a + BG[2])),
                width=2 * SS)
 
+    img = scanlines(img)
     return img.resize((W, H), Image.LANCZOS)
 
 
@@ -112,6 +155,7 @@ def shadow_wave():
     img = base()
     art = Image.new("RGB", img.size, BG)
     d = ImageDraw.Draw(art)
+    horizon(d, 300, NEON, rows=6)
 
     # stacked sine walls, each with a gap — the actual mechanic
     for n, (amp, yoff, gapx, alpha) in enumerate([
@@ -143,12 +187,13 @@ def lumen_run():
     img = base()
     art = Image.new("RGB", img.size, BG)
     d = ImageDraw.Draw(art)
+    horizon(d, 304, NEON, rows=5)
 
     ground = 300
     d.line([(0, ground * SS), (W * SS, ground * SS)], fill=SHADOW, width=3 * SS)
     for x in range(0, W, 34):                   # ground tick marks = speed
         d.line([(x * SS, ground * SS), ((x + 16) * SS, ground * SS)],
-               fill=GLOW, width=3 * SS)
+               fill=NEON, width=3 * SS)
 
     # the runner's arc, mid-jump
     pts = [(80 + i * 4, ground - 18 - math.sin(i / 34 * math.pi) * 104)
@@ -165,9 +210,9 @@ def lumen_run():
     for cx, cy in [(470, 212), (530, 188), (590, 232)]:   # lumens to collect
         orb(d, cx * SS, cy * SS, 6 * SS, GOOD, rings=4)
 
-    for bx in [400, 560]:                                  # obstacles
+    for bx in [400, 560]:                                  # obstacles = danger
         d.rectangle([bx * SS, (ground - 42) * SS, (bx + 16) * SS, ground * SS],
-                    fill=SHADOW)
+                    fill=HOT)
 
     img = lay(img, art)
     return finish(img, "Lumen Run")
@@ -178,6 +223,7 @@ def light_rally():
     img = base()
     art = Image.new("RGB", img.size, BG)
     d = ImageDraw.Draw(art)
+    horizon(d, 322, NEON, rows=4)
 
     # brick wall being broken down
     for row in range(3):

@@ -50,9 +50,9 @@ function serve(dir) {
 
 function drawPaddle(p, warm) {
   x.save();
-  x.shadowColor = warm ? "#ffb020" : "#7a5fd6";
+  x.shadowColor = warm ? "#ffa52b" : "#9d4edd";
   x.shadowBlur = 14;
-  x.fillStyle = warm ? "#ffd75e" : "#8f6fe8";
+  x.fillStyle = warm ? "#ffc93c" : "#b86aff";
   x.beginPath();
   x.roundRect(p.x - p.w / 2, p.y - p.h / 2, p.w, p.h, 5);
   x.fill();
@@ -64,7 +64,7 @@ function step() {
   x.clearRect(0, 0, W, H);
 
   // court
-  x.strokeStyle = "#1b1836";
+  x.strokeStyle = "#161b3f";
   x.setLineDash([5, 9]);
   x.beginPath(); x.moveTo(0, H / 2); x.lineTo(W, H / 2); x.stroke();
   x.setLineDash([]);
@@ -122,7 +122,7 @@ function step() {
   // trail
   trail.forEach((p, i) => {
     x.globalAlpha = (i / trail.length) * 0.4;
-    x.fillStyle = "#ffd75e";
+    x.fillStyle = "#ffc93c";
     x.beginPath(); x.arc(p.x, p.y, ball.r * (i / trail.length), 0, 6.3); x.fill();
   });
   x.globalAlpha = 1;
@@ -131,13 +131,13 @@ function step() {
   drawPaddle(me, true);
 
   x.save();
-  x.shadowColor = "#ffb020"; x.shadowBlur = 20;
-  x.fillStyle = "#fff6d8";
+  x.shadowColor = "#ffa52b"; x.shadowBlur = 20;
+  x.fillStyle = "#fff4cf";
   x.beginPath(); x.arc(ball.x, ball.y, ball.r, 0, 6.3); x.fill();
   x.restore();
 
   if (ball.held > 0 && !over) {
-    x.fillStyle = "#6f6a86";
+    x.fillStyle = "#5a6a9a";
     x.font = "12px ui-monospace, monospace";
     x.textAlign = "center";
     x.fillText("here it comes", W / 2, H / 2 + 34);

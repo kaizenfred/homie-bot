@@ -14,7 +14,7 @@
 <div id="msg">
   <h1>Lumen Run</h1>
   <p>Collect every lumen in the grid. The shadows want them back.<br>
-     Swipe or use arrows. Grab a <b style="color:#ffd75e">sunburst</b> and
+     Swipe or use arrows. Grab a <b style="color:#ffc93c">sunburst</b> and
      for five seconds <i>they</i> run from <i>you</i>.</p>
   <button id="go">start</button>
 </div>
@@ -77,7 +77,7 @@ function reset(full) {
   grid = MAZE.map(r => r.split(""));
   pellets = grid.flat().filter(ch => ch === "." || ch === "o").length;
   runner = { cx: 8, cy: 12, x: 8 * T, y: 12 * T, d: { x: 0, y: 0 }, mouth: 0 };
-  const tints = ["#8f6fe8", "#6f8fe8", "#b06fe8", "#6fd0e8"];
+  const tints = ["#b86aff", "#4f9dff", "#ff2e88", "#19e6ff"];
   foes = tints.map((tint, i) => ({
     cx: 7 + i % 3, cy: 8, x: (7 + i % 3) * T, y: 8 * T,
     d: { x: i % 2 ? 1 : -1, y: 0 }, tint, out: i * 70, scared: 0,
@@ -131,19 +131,19 @@ function drawMaze() {
   for (let r = 0; r < ROWS; r++) for (let col = 0; col < COLS; col++) {
     const ch = grid[r][col], px = col * T, py = r * T;
     if (ch === "#") {
-      x.fillStyle = "#1b1836";
+      x.fillStyle = "#161b3f";
       x.fillRect(px + 1, py + 1, T - 2, T - 2);
-      x.fillStyle = "#272247";
+      x.fillStyle = "#1b1f4a";
       x.fillRect(px + 1, py + 1, T - 2, 2);
     } else if (ch === "-") {
-      x.fillStyle = "#3a3360"; x.fillRect(px + 1, py + T / 2 - 1, T - 2, 2);
+      x.fillStyle = "#2a3270"; x.fillRect(px + 1, py + T / 2 - 1, T - 2, 2);
     } else if (ch === ".") {
-      x.fillStyle = "#c8b98a";
+      x.fillStyle = "#8a7a4a";
       x.beginPath(); x.arc(px + T / 2, py + T / 2, 2.1, 0, 6.3); x.fill();
     } else if (ch === "o") {
       const pulse = 4 + Math.sin(t / 7) * 1.4;
-      x.save(); x.shadowColor = "#ffd75e"; x.shadowBlur = 12;
-      x.fillStyle = "#ffd75e";
+      x.save(); x.shadowColor = "#ffc93c"; x.shadowBlur = 12;
+      x.fillStyle = "#ffc93c";
       x.beginPath(); x.arc(px + T / 2, py + T / 2, pulse, 0, 6.3); x.fill();
       x.restore();
     }
@@ -155,8 +155,8 @@ function drawRunner() {
   const open = Math.abs(Math.sin(t / 5)) * 0.72;
   const ang = Math.atan2(runner.d.y, runner.d.x);
   x.save();
-  x.shadowColor = "#ffb020"; x.shadowBlur = 16;
-  x.fillStyle = "#ffd75e";
+  x.shadowColor = "#ffa52b"; x.shadowBlur = 16;
+  x.fillStyle = "#ffc93c";
   x.beginPath();
   if (runner.d.x || runner.d.y) {
     x.moveTo(cx, cy);
@@ -171,7 +171,7 @@ function drawRunner() {
 function drawFoe(f) {
   const cx = f.x + T / 2, cy = f.y + T / 2, r = T / 2 - 2;
   const scared = f.scared > 0;
-  const tint = scared ? (f.scared < 90 && t % 12 < 6 ? "#f6f3e8" : "#2f3f8f") : f.tint;
+  const tint = scared ? (f.scared < 90 && t % 12 < 6 ? "#e8f4ff" : "#22306e") : f.tint;
   const g = x.createRadialGradient(cx, cy - 2, 1, cx, cy, r + 4);
   g.addColorStop(0, tint); g.addColorStop(1, "rgba(12,8,30,0)");
   x.fillStyle = g;
@@ -179,7 +179,7 @@ function drawFoe(f) {
   x.ellipse(cx, cy + Math.sin(t / 8 + f.cx) * 1.2, r + 2, r + 1, 0, 0, 6.3);
   x.fill();
   if (!scared) {
-    x.fillStyle = "#0b0b16";
+    x.fillStyle = "#0a0a1f";
     x.beginPath();
     x.arc(cx - 3.6, cy - 1, 2, 0, 6.3);
     x.arc(cx + 3.6, cy - 1, 2, 0, 6.3);

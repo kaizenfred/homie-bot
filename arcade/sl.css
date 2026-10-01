@@ -1,16 +1,30 @@
+/* SpreadLight arcade — shared shell for every game.
+
+   The rule the whole look hangs on: COLD IS THE MACHINE, WARM IS YOU.
+   Cyan, violet and magenta belong to the city and everything trying to
+   end your run. Amber is the player and the lumens. Figure and ground are
+   separated by temperature rather than brightness alone, which is what
+   keeps these readable on a phone in daylight — the thing you must not
+   lose track of is the only warm object on screen. */
+
 :root {
-  --bg: #07070d;
-  --ink: #f6f3e8;
-  --dim: #6f6a86;
-  --light: #ffd75e;
-  --glow: #ffb020;
-  --shadow: #5b3ea8;
-  --good: #57e0a0;
+  --void:  #04030c;   /* night between the buildings */
+  --deck:  #0a0a1f;   /* play surface */
+  --grid:  #1b1f4a;   /* inert structure */
+  --neon:  #19e6ff;   /* the city, UI chrome */
+  --hot:   #ff2e88;   /* danger */
+  --volt:  #9d4edd;   /* the shadow mass */
+  --light: #ffc93c;   /* you, and what you collect */
+  --mint:  #2bffcf;   /* pickups */
+  --ink:   #e8f4ff;
+  --dim:   #5a6a9a;
 }
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
+
 html, body {
   height: 100%;
-  background: var(--bg);
+  background: var(--void);
   color: var(--ink);
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   overflow: hidden;
@@ -18,6 +32,7 @@ html, body {
   user-select: none;
   -webkit-tap-highlight-color: transparent;
 }
+
 body {
   display: flex;
   flex-direction: column;
@@ -25,25 +40,60 @@ body {
   justify-content: center;
   gap: 10px;
   padding: 12px;
+  /* horizon glow — the city is always somewhere below the frame */
+  background:
+    radial-gradient(120% 60% at 50% 118%, #141a4d 0%, transparent 70%),
+    var(--void);
 }
+
+/* CRT scanlines over everything, including the canvas, which cannot carry
+   a pseudo-element of its own. Kept at 3% so it reads as texture and never
+   competes with a moving sprite. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0 2px,
+    rgba(0, 0, 0, .28) 2px 3px
+  );
+  opacity: .34;
+  mix-blend-mode: multiply;
+}
+
 #hud {
   display: flex;
   gap: 18px;
-  font-size: 13px;
-  letter-spacing: .08em;
+  font-size: 12px;
+  letter-spacing: .22em;
   text-transform: uppercase;
-  color: var(--dim);
+  color: var(--neon);
+  text-shadow: 0 0 10px rgba(25, 230, 255, .5);
 }
-#hud b { color: var(--light); font-weight: 600; }
+#hud b {
+  color: var(--light);
+  font-weight: 700;
+  text-shadow: 0 0 10px rgba(255, 201, 60, .6);
+}
+
 canvas {
-  border-radius: 12px;
-  background: #0b0b16;
-  box-shadow: 0 0 0 1px #1d1a2e, 0 18px 50px -20px var(--glow);
+  border-radius: 10px;
+  background: var(--deck);
+  box-shadow:
+    0 0 0 1px var(--grid),
+    0 0 0 2px rgba(25, 230, 255, .18),
+    0 0 44px -6px rgba(25, 230, 255, .32),
+    0 22px 60px -24px rgba(157, 78, 221, .6);
   touch-action: none;
 }
+
 #msg {
   position: fixed;
   inset: 0;
+  z-index: 10;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -51,34 +101,58 @@ canvas {
   gap: 14px;
   text-align: center;
   padding: 24px;
-  background: rgba(7, 7, 13, .93);
-  backdrop-filter: blur(3px);
+  background: radial-gradient(90% 70% at 50% 50%, rgba(10, 10, 31, .92), rgba(4, 3, 12, .97));
+  backdrop-filter: blur(4px);
 }
 #msg.hide { display: none; }
+
+/* The one loud moment: a badly-tuned signal. Two offset copies bleed cyan
+   and magenta out from under the amber, the way a CRT misconverges. Used
+   on the title only — repeat it anywhere else and the page just looks
+   broken rather than transmitted. */
 #msg h1 {
-  font-size: clamp(22px, 7vw, 34px);
+  font-size: clamp(24px, 8vw, 38px);
+  letter-spacing: .06em;
   color: var(--light);
-  letter-spacing: .02em;
+  text-shadow:
+    -2px 0 0 rgba(255, 46, 136, .85),
+     2px 0 0 rgba(25, 230, 255, .85),
+     0 0 26px rgba(255, 201, 60, .45);
 }
-#msg p { color: var(--dim); font-size: 14px; line-height: 1.6; max-width: 32ch; }
+
+#msg p {
+  color: var(--dim);
+  font-size: 14px;
+  line-height: 1.65;
+  max-width: 32ch;
+}
 #msg .score { color: var(--ink); font-size: 18px; }
+
 button {
   font: inherit;
-  font-size: 15px;
+  font-size: 14px;
   padding: 13px 30px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 2px;
   background: var(--light);
-  color: #1a1400;
+  color: #1a1200;
   font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
   cursor: pointer;
-  letter-spacing: .04em;
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+  box-shadow: 0 0 24px -4px rgba(255, 201, 60, .7);
 }
 button:active { transform: translateY(1px); }
+
 .ghost {
   background: transparent;
-  color: var(--dim);
-  box-shadow: inset 0 0 0 1px #2a2640;
+  color: var(--neon);
+  box-shadow: inset 0 0 0 1px rgba(25, 230, 255, .45);
   padding: 10px 22px;
-  font-size: 13px;
+  font-size: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body::after { display: none; }
 }
