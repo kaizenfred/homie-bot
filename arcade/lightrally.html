@@ -42,10 +42,12 @@ function reset(full) {
 function serve(dir) {
   ball = {
     x: W / 2, y: H / 2,
-    vx: (Math.random() - .5) * 3.4,
-    vy: dir * 3.6,
+    vx: (Math.random() - .5) * 3.6,
+    vy: dir * 3.9,
     r: 6, held: 45,
   };
+  // the rally is over, so both paddles go back to full width
+  if (me) { me.w = 62; foe.w = 62; }
 }
 
 function drawPaddle(p, warm) {
@@ -75,38 +77,54 @@ function step() {
     me.x += (Math.max(me.w / 2, Math.min(W - me.w / 2, aimX)) - me.x) * 0.35;
 
     // opponent: deliberately imperfect, gets sharper as the rally grows
-    const skill = Math.min(0.14 + rally * 0.006, 0.3);
-    const drift = Math.sin(t / 30) * 22;
+    const skill = Math.min(0.17 + rally * 0.008, 0.38);
+    const drift = Math.sin(t / 30) * 18;   // reads the ball a little truer
     foe.x += ((ball.vy < 0 ? ball.x + drift : W / 2) - foe.x) * skill;
     foe.x = Math.max(foe.w / 2, Math.min(W - foe.w / 2, foe.x));
 
     if (ball.held > 0) {
       ball.held--;
     } else {
-      ball.x += ball.vx; ball.y += ball.vy;
+      /* Substepped, and that isn't cosmetic. The collision test asks whether
+         the ball is NEAR a paddle right now, so once a rally pushed the ball
+         past about 10px per frame it could sit above the paddle on one frame
+         and below it on the next, never testing as near, and sail straight
+         through a paddle it had visibly hit. Moving in sub-pixel-safe steps
+         means the ball is tested at every point it passes through — which is
+         also what makes it safe to let the ball get faster than before. */
+      const steps = Math.max(1, Math.ceil(Math.hypot(ball.vx, ball.vy) / 3));
+      for (let i = 0; i < steps; i++) {
+        ball.x += ball.vx / steps; ball.y += ball.vy / steps;
+
+        if (ball.x < ball.r || ball.x > W - ball.r) {
+          ball.vx *= -1;
+          ball.x = Math.max(ball.r, Math.min(W - ball.r, ball.x));
+        }
+
+        [me, foe].forEach(p => {
+          const near = Math.abs(ball.y - p.y) < p.h / 2 + ball.r;
+          const on = Math.abs(ball.x - p.x) < p.w / 2 + ball.r;
+          const coming = (p === me && ball.vy > 0) || (p === foe && ball.vy < 0);
+          if (near && on && coming) {
+            const off = (ball.x - p.x) / (p.w / 2);
+            ball.vx = off * 4.4;
+            ball.vy *= -1;
+            // Faster per return than before, but capped: past roughly 11px a
+            // frame the ball crosses the paddle's whole height between two
+            // visible frames and there is nothing left to react to.
+            const sp = Math.min(11 / Math.hypot(ball.vx, ball.vy), 1.05);
+            ball.vx *= sp; ball.vy *= sp;
+            ball.y = p.y + (p === me ? -1 : 1) * (p.h / 2 + ball.r + 1);
+            rally++;
+            if (p === me) score += 10 + rally;
+            // the court tightens as the rally grows — down to 74% of full width
+            const shrink = Math.max(0.74, 1 - rally * 0.012);
+            me.w = 62 * shrink; foe.w = 62 * shrink;
+          }
+        });
+      }
       trail.push({ x: ball.x, y: ball.y });
       if (trail.length > 12) trail.shift();
-
-      if (ball.x < ball.r || ball.x > W - ball.r) {
-        ball.vx *= -1;
-        ball.x = Math.max(ball.r, Math.min(W - ball.r, ball.x));
-      }
-
-      [me, foe].forEach(p => {
-        const near = Math.abs(ball.y - p.y) < p.h / 2 + ball.r;
-        const on = Math.abs(ball.x - p.x) < p.w / 2 + ball.r;
-        const coming = (p === me && ball.vy > 0) || (p === foe && ball.vy < 0);
-        if (near && on && coming) {
-          const off = (ball.x - p.x) / (p.w / 2);
-          ball.vx = off * 4.2;
-          ball.vy *= -1;
-          const speed = Math.min(1.035, 1 + 0.04);
-          ball.vx *= speed; ball.vy *= speed;
-          ball.y = p.y + (p === me ? -1 : 1) * (p.h / 2 + ball.r + 1);
-          rally++;
-          if (p === me) score += 10 + rally;
-        }
-      });
 
       if (ball.y > H + 20) {
         lives--;

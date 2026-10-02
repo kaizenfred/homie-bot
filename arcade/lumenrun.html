@@ -21,12 +21,24 @@
 
 <script src="sl.js"></script>
 <script>
-/* Hand-drawn grid. # wall, . lumen, o sunburst, space empty, - gate */
+/* Hand-drawn grid. # wall, . lumen, o sunburst, space empty, - gate
+ *
+ * Three cells in here used to be walls, and between them they sealed off 17
+ * of the 125 lumens — the entire top-right wing including one of the four
+ * sunbursts, plus two pockets along the bottom. Since the level only ends
+ * when the pellet count reaches zero, the grid could never be cleared: no
+ * level 2, no clear bonus, and a row of dots that visibly refused to be
+ * eaten. Row 3 now has a way down on the right, and row 15 opens the two
+ * bottom pockets.
+ *
+ * reachable() below enforces this at runtime, so editing the maze can't
+ * quietly bring the bug back.
+ */
 const MAZE = [
   "#################",
   "#o......#......o#",
   "#.##.##.#.##.##.#",
-  "#.###############",
+  "#.#############.#",
   "#...............#",
   "###.##.###.##.###",
   "#.....#...#.....#",
@@ -38,7 +50,7 @@ const MAZE = [
   "#...............#",
   "#.##.##.#.##.##.#",
   "#o.#.......#...o#",
-  "##.#.#####.#.#.##",
+  "##.#.##.##.#.#..#",
   "#....#...#....#.#",
   "#.####.#.#.####.#",
   "#################",
@@ -72,15 +84,54 @@ const wall = (cx, cy) => {
   return grid[cy][cx] === "#";
 };
 
+const SPAWN = { cx: 8, cy: 12 };
+
+/* Every cell the runner can actually walk to, from where it starts.
+   A lumen outside this set can never be eaten, and because the level ends on
+   the pellet count hitting zero, one such lumen makes the grid uncompletable
+   forever. Rather than trusting the hand-drawn maze, strip anything walled
+   off — and say so in the console, so a bad edit is loud instead of silent. */
+function reachable(g) {
+  const key = (r, col) => r * COLS + col;
+  const seen = new Set([key(SPAWN.cy, SPAWN.cx)]);
+  const queue = [[SPAWN.cy, SPAWN.cx]];
+  while (queue.length) {
+    const [r, col] = queue.pop();
+    for (const [dr, dc] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+      const nr = r + dr, nc = (col + dc + COLS) % COLS;
+      if (nr < 0 || nr >= ROWS) continue;
+      if (g[nr][nc] === "#" || seen.has(key(nr, nc))) continue;
+      seen.add(key(nr, nc)); queue.push([nr, nc]);
+    }
+  }
+  return seen;
+}
+
 function reset(full) {
   if (full) { score = 0; level = 1; lives = 3; }
   grid = MAZE.map(r => r.split(""));
+
+  const open = reachable(grid);
+  let orphans = 0;
+  for (let r = 0; r < ROWS; r++) for (let col = 0; col < COLS; col++) {
+    const ch = grid[r][col];
+    if ((ch === "." || ch === "o") && !open.has(r * COLS + col)) {
+      grid[r][col] = " "; orphans++;
+    }
+  }
+  if (orphans) {
+    console.warn(`lumenrun: ${orphans} lumen(s) are walled off and were ` +
+                 `removed so the grid can still be cleared — fix MAZE`);
+  }
   pellets = grid.flat().filter(ch => ch === "." || ch === "o").length;
-  runner = { cx: 8, cy: 12, x: 8 * T, y: 12 * T, d: { x: 0, y: 0 }, mouth: 0 };
+  runner = { cx: SPAWN.cx, cy: SPAWN.cy, x: SPAWN.cx * T, y: SPAWN.cy * T,
+             d: { x: 0, y: 0 }, mouth: 0 };
   const tints = ["#b86aff", "#4f9dff", "#ff2e88", "#19e6ff"];
   foes = tints.map((tint, i) => ({
     cx: 7 + i % 3, cy: 8, x: (7 + i % 3) * T, y: 8 * T,
-    d: { x: i % 2 ? 1 : -1, y: 0 }, tint, out: i * 70, scared: 0,
+    // they leave the house sooner than they used to, so you get less of a
+    // free run at the start of a grid
+    d: { x: i % 2 ? 1 : -1, y: 0 }, tint, out: i * 52, scared: 0,
   }));
   power = 0; over = false; t = 0; started = false;
 }
@@ -122,7 +173,11 @@ function chase(f) {
     const dbb = Math.hypot(f.cx + b.x - runner.cx, f.cy + b.y - runner.cy);
     return (da - dbb) * want;
   });
-  f.d = (Math.random() < .78) ? opts[0] : opts[(Math.random() * opts.length) | 0];
+  // They take the best turn more often now, and get a little sharper each
+  // level. Still short of perfect — a shadow that never guesses wrong is
+  // unbeatable rather than hard.
+  const smart = Math.min(0.86 + level * 0.015, 0.94);
+  f.d = (Math.random() < smart) ? opts[0] : opts[(Math.random() * opts.length) | 0];
 }
 
 /* --- draw --------------------------------------------------------------- */
@@ -208,14 +263,20 @@ function step() {
       grid[runner.cy][runner.cx] = " ";
       pellets--;
       score += ch === "o" ? 25 : 5;
-      if (ch === "o") { power = 300; foes.forEach(f => f.scared = 300); }
+      // a sunburst buys less time than it used to, and less again each level
+      if (ch === "o") {
+        const span = Math.max(130, 260 - level * 18);
+        power = span; foes.forEach(f => f.scared = span);
+      }
     }
     if (power > 0) { power--; foes.forEach(f => f.scared = Math.max(0, f.scared - 1)); }
 
     foes.forEach(f => {
       if (f.out > 0) { f.out--; return; }
       chase(f);
-      move(f, f.scared > 0 ? 1.3 : 1.7 + level * 0.12);
+      // capped a shade under the runner's 2.4 so a straight chase is always
+      // survivable — above that they simply catch you and skill stops mattering
+      move(f, f.scared > 0 ? 1.25 : Math.min(1.85 + level * 0.15, 2.3));
       if (Math.hypot(f.x - runner.x, f.y - runner.y) < T * 0.75) {
         if (f.scared > 0) {
           score += 100; f.cx = 8; f.cy = 8; f.x = 8 * T; f.y = 8 * T;

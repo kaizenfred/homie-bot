@@ -256,12 +256,95 @@ def light_rally():
     return finish(img, "Light Rally")
 
 
+# --- Neon Breach: first person, down the barrel -----------------------------
+def neon_breach():
+    """The cover has one job the others don't: say "first person" instantly.
+
+    So it is drawn as the view itself — one-point perspective down a corridor,
+    a crosshair on the vanishing point, and the emitter in the bottom of frame
+    exactly where the game puts it. A side-on illustration of the same scene
+    would look like every other cabinet on the rack.
+    """
+    img = base()
+    art = Image.new("RGB", img.size, BG)
+    d = ImageDraw.Draw(art)
+
+    VX, VY = 404, 214           # vanishing point, off-centre so it isn't static
+
+    # corridor: wall tops and bottoms converging on the vanishing point
+    for side, edge in ((-1, 150), (1, 648)):
+        for yy, col, a in ((132, NEON, 0.95), (318, NEON, 0.55)):
+            x0 = edge if side > 0 else -8
+            d.line([(x0 * SS, yy * SS), (VX * SS, VY * SS)],
+                   fill=tuple(int(c * a + BG[i] * (1 - a)) for i, c in enumerate(col)),
+                   width=3 * SS)
+
+    # wall panels: vertical ribs, spaced by perspective so they bunch up
+    for i in range(1, 11):
+        t = i / 11
+        depth = t ** 2.1
+        wy_top = VY - (VY - 132) * (1 - depth)
+        wy_bot = VY + (318 - VY) * (1 - depth)
+        a = 0.14 + 0.5 * (1 - depth)
+        col = tuple(int(c * a + BG[j] * (1 - a)) for j, c in enumerate(GRID))
+        for side in (-1, 1):
+            px = VX + side * (VX if side < 0 else (648 - VX)) * (1 - depth)
+            d.line([(px * SS, wy_top * SS), (px * SS, wy_bot * SS)],
+                   fill=col, width=3 * SS)
+
+    # floor bands at whole-tile distances, same as the game draws them
+    for i in range(1, 9):
+        y = VY + 150 / i
+        a = 0.1 + 0.42 * (1 / i)
+        d.line([(0, y * SS), (W * SS, y * SS)],
+               fill=tuple(int(c * a + BG[j] * (1 - a)) for j, c in enumerate(NEON)),
+               width=2 * SS)
+
+    def drone(cx, cy, r, colour, alpha=1.0):
+        col = tuple(int(c * alpha + BG[i] * (1 - alpha)) for i, c in enumerate(colour))
+        pts = [(cx + math.cos(i * math.pi / 3) * r,
+                cy + math.sin(i * math.pi / 3) * r * 1.12) for i in range(6)]
+        d.polygon([(p[0] * SS, p[1] * SS) for p in pts], outline=col, fill=DECK)
+        for i in range(6):
+            a, b = pts[i], pts[(i + 1) % 6]
+            d.line([(a[0] * SS, a[1] * SS), (b[0] * SS, b[1] * SS)],
+                   fill=col, width=max(1, int(r * 0.12)) * SS)
+        d.ellipse([(cx - r * 0.44) * SS, (cy - r * 0.27) * SS,
+                   (cx + r * 0.44) * SS, (cy + r * 0.27) * SS], fill=col)
+
+    drone(196, 250, 48, NEON)         # close, bearing down
+    drone(486, 224, 27, HOT)          # mid
+    drone(330, 202, 14, SHADOW, 0.8)  # far, nearly in the dark
+
+    orb(d, 286 * SS, 288 * SS, 8 * SS, LIGHT)     # a dropped lumen on the floor
+
+    # crosshair, on the vanishing point
+    for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+        d.line([((VX + dx * 11) * SS, (VY + dy * 11) * SS),
+                ((VX + dx * 32) * SS, (VY + dy * 32) * SS)],
+               fill=GOOD, width=3 * SS)
+    d.rectangle([(VX - 2) * SS, (VY - 2) * SS, (VX + 2) * SS, (VY + 2) * SS], fill=GOOD)
+
+    # the emitter, bottom of frame
+    d.polygon([(276 * SS, 360 * SS), (300 * SS, 300 * SS),
+               (360 * SS, 300 * SS), (384 * SS, 360 * SS)],
+              fill=DECK, outline=NEON)
+    for xx in (300, 360):
+        d.line([(xx * SS, 300 * SS), (xx * SS, 360 * SS)], fill=NEON, width=2 * SS)
+    d.line([(300 * SS, 300 * SS), (360 * SS, 300 * SS)], fill=NEON, width=4 * SS)
+    d.rectangle([320 * SS, 288 * SS, 340 * SS, 303 * SS], fill=GOOD)
+
+    img = lay(img, art)
+    return finish(img, "Neon Breach")
+
+
 if __name__ == "__main__":
     out = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ".")
     out.mkdir(parents=True, exist_ok=True)
     for name, fn in [("shadowwave", shadow_wave),
                      ("lumenrun", lumen_run),
-                     ("lightrally", light_rally)]:
+                     ("lightrally", light_rally),
+                     ("neonbreach", neon_breach)]:
         p = out / f"{name}.png"
         img = fn()
         assert img.size == (W, H), img.size

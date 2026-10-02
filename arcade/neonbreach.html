@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Neon Breach</title>
+<link rel="stylesheet" href="sl.css">
+<script src="https://telegram.org/js/games.js"></script>
+<style>
+  /* The view is the whole canvas, so the controls hint sits over it and
+     fades out once you've clearly worked them out. */
+  #tip {
+    position: fixed; left: 0; right: 0; bottom: 12px; text-align: center;
+    font-size: 11px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--dim); pointer-events: none;
+    transition: opacity .6s ease; z-index: 3;
+  }
+  #tip.gone { opacity: 0; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <span>score <b id="s">0</b></span>
+  <span>wave <b id="w">1</b></span>
+  <span>light <b id="l">3</b></span>
+</div>
+<canvas id="c" width="360" height="520"></canvas>
+<p id="tip">hold to steer · tap to fire</p>
+
+<div id="msg">
+  <h1>Neon Breach</h1>
+  <p>You're inside the grid. The shadows got in with you.<br>
+     <b>Hold anywhere</b> and slide to move and turn — it works like a thumbstick.
+     <b>Tap</b> to fire. Pick up every <b style="color:#ffc93c">lumen</b> they drop.</p>
+  <button id="go">breach</button>
+</div>
+
+<script src="sl.js"></script>
+<script>
+/* =======================================================================
+   Neon Breach — a raycaster, because a grid you walk through in first
+   person is the one thing the flat games can't give you.
+
+   Everything is drawn in 180 vertical columns, 2px wide. Each column is one
+   ray walked through the map with DDA; the distance it travels decides how
+   tall that slice of wall is and how far it fades into the dark. Sprites are
+   flat shapes projected into the same space and clipped against the depth
+   written down per column, which is what lets a drone stand behind a pillar.
+   ======================================================================= */
+
+/* # structural wall, = neon, % hot, . floor */
+const MAP = [
+  "####################",
+  "#..................#",
+  "#..==..#..##..==...#",
+  "#..==..#......==...#",
+  "#......#...........#",
+  "#...%%%....%%%.....#",
+  "#...%........%.....#",
+  "#...%...##...%.....#",
+  "#.......##.........#",
+  "#..................#",
+  "#..................#",
+  "#..==.......====...#",
+  "#..==..........=...#",
+  "#..............=...#",
+  "#...%%%%%..........#",
+  "#.......%...==.....#",
+  "#.......%...==.....#",
+  "#..................#",
+  "#..................#",
+  "####################",
+];
+const MH = MAP.length, MW = MAP[0].length;
+const SOLID = "#=%";
+
+const c = document.getElementById("c"), x = c.getContext("2d");
+const W = c.width, H = c.height;
+SL.fit(c);
+
+const COLW = 2, RAYS = W / COLW;
+const HORIZON = Math.round(H * 0.44);
+/* Wall height and field of view are the two numbers that decide whether a
+   portrait screen feels like a corridor or a letterbox. Tall walls plus a
+   narrow view on a phone meant you could see almost nothing either side of
+   the crosshair, which in a game about things closing in on you is the wrong
+   way round. Shorter walls, wider view. */
+const WALLH = H * 0.82;
+const zbuf = new Float32Array(RAYS);
+
+/* --- palette ------------------------------------------------------------
+   Cold is the machine, warm is you — the same rule the other cabinets use.
+   Shades are precomputed: 180 columns a frame is no place to be building
+   colour strings. */
+const VOID = [4, 3, 12];
+const BASE = { "#": [34, 40, 96], "=": [25, 230, 255], "%": [255, 46, 136] };
+const FOG = 26, FOG_FAR = 15;
+const SHADE = {};
+for (const k in BASE) {
+  SHADE[k] = [[], []];
+  for (let side = 0; side < 2; side++) {
+    const dim = side ? 0.58 : 1;           // y-facing walls read darker
+    for (let f = 0; f < FOG; f++) {
+      const lit = 1 - f / (FOG - 1);
+      SHADE[k][side][f] = "rgb(" + BASE[k].map((ch, i) =>
+        Math.round((ch * dim * lit) + VOID[i] * (1 - lit))).join(",") + ")";
+    }
+  }
+}
+const fogIndex = d =>
+  Math.min(FOG - 1, Math.max(0, Math.round((d / FOG_FAR) * (FOG - 1))));
+
+const tileAt = (mx, my) =>
+  (mx < 0 || my < 0 || mx >= MW || my >= MH) ? "#" : MAP[my][mx];
+const blocked = (fx, fy) => SOLID.includes(tileAt(fx | 0, fy | 0));
+
+/* --- state -------------------------------------------------------------- */
+
+let px, py, dirX, dirY, planeX, planeY;
+let drones, lumens, wave, score, light, over, started, t;
+let cool, flash, shake, hurt;
+
+function reset(full) {
+  if (full) { score = 0; light = 3; wave = 1; }
+  px = 7.5; py = 10.5;
+  dirX = 1; dirY = 0;
+  planeX = 0; planeY = 0.86;            // ~80° field of view
+  drones = []; lumens = [];
+  cool = 0; flash = 0; shake = 0; hurt = 0;
+  over = false; started = false; t = 0;
+  startWave(wave);
+}
+
+/* Each wave adds bodies and pace. From wave 3 some of them are hulks: slow,
+   three hits, and they soak the shots you wanted for something else. */
+function startWave(n) {
+  drones = [];
+  const count = Math.min(3 + n, 11);
+  for (let i = 0; i < count; i++) {
+    const hulk = n >= 3 && i % 4 === 3;
+    drones.push(makeDrone(hulk, n));
+  }
+}
+
+function makeDrone(hulk, n) {
+  // Somewhere on open floor, and never right on top of the player.
+  let fx, fy, tries = 0;
+  do {
+    fx = 1.5 + Math.random() * (MW - 3);
+    fy = 1.5 + Math.random() * (MH - 3);
+    tries++;
+  } while (tries < 200 && (blocked(fx, fy) || Math.hypot(fx - px, fy - py) < 5));
+  return {
+    x: fx, y: fy, hulk,
+    hp: hulk ? 3 : 1,
+    speed: (hulk ? 0.012 : 0.019) + n * 0.0019,
+    scale: hulk ? 1.95 : 1.38,
+    h: 0.5, hit: 0, phase: Math.random() * 6.28,
+    tint: hulk ? "#ff2e88" : "#19e6ff",
+  };
+}
+
+/* --- input -------------------------------------------------------------
+   One thumb does everything. Holding anywhere plants a stick at that point;
+   sliding off it steers and walks, and letting go without really moving is a
+   shot. Two separate on-screen pads would eat a phone screen this small. */
+const keys = SL.input();
+const stick = { on: false, ox: 0, oy: 0, dx: 0, dy: 0, t0: 0, far: 0 };
+
+function local(e) {
+  const r = c.getBoundingClientRect();
+  const p = e.touches ? e.touches[0] : e;
+  return { x: p.clientX - r.left, y: p.clientY - r.top };
+}
+function down(e) {
+  const p = local(e);
+  stick.on = true; stick.ox = p.x; stick.oy = p.y;
+  stick.dx = 0; stick.dy = 0; stick.far = 0; stick.t0 = performance.now();
+}
+function drag(e) {
+  if (!stick.on) return;
+  const p = local(e);
+  stick.dx = p.x - stick.ox; stick.dy = p.y - stick.oy;
+  stick.far = Math.max(stick.far, Math.hypot(stick.dx, stick.dy));
+}
+function up() {
+  if (!stick.on) return;
+  const quick = performance.now() - stick.t0 < 260;
+  if (stick.far < 15 && quick) fire();
+  stick.on = false; stick.dx = 0; stick.dy = 0;
+  hideTip();
+}
+c.addEventListener("touchstart", e => { down(e); e.preventDefault(); }, { passive: false });
+c.addEventListener("touchmove",  e => { drag(e); e.preventDefault(); }, { passive: false });
+c.addEventListener("touchend",   e => { up();    e.preventDefault(); }, { passive: false });
+c.addEventListener("mousedown", down);
+c.addEventListener("mousemove", drag);
+addEventListener("mouseup", up);
+
+/* Space is polled each frame as well, which gives you auto-fire while it's
+   held — but a quick tap can begin and end between two frames and never be
+   seen at all. This catches the press itself, so a single tap always shoots. */
+addEventListener("keydown", e => {
+  if (e.code === "Space" && started && !over) { fire(); e.preventDefault(); }
+});
+
+let tipGone = false;
+function hideTip() {
+  if (tipGone) return;
+  tipGone = true;
+  setTimeout(() => document.getElementById("tip").classList.add("gone"), 2600);
+}
+
+/* --- movement ----------------------------------------------------------- */
+
+function rotate(a) {
+  const cs = Math.cos(a), sn = Math.sin(a);
+  const ndx = dirX * cs - dirY * sn, ndy = dirX * sn + dirY * cs;
+  const npx = planeX * cs - planeY * sn, npy = planeX * sn + planeY * cs;
+  dirX = ndx; dirY = ndy; planeX = npx; planeY = npy;
+}
+
+/* Axis at a time, so brushing a wall slides along it instead of stopping
+   dead — the difference between an arena that feels tight and one that feels
+   sticky. R is the player's shoulder width in tiles. */
+function shift(mx, my) {
+  const R = 0.26;
+  if (mx && !blocked(px + mx + Math.sign(mx) * R, py)) px += mx;
+  if (my && !blocked(px, py + my + Math.sign(my) * R)) py += my;
+}
+
+function stepDrone(d) {
+  const vx = px - d.x, vy = py - d.y;
+  const dist = Math.hypot(vx, vy) || 1;
+  // a lazy weave, so a line of them doesn't arrive as one solid rank
+  const sway = Math.sin(t / 26 + d.phase) * 0.45;
+  const nx = (vx / dist) * d.speed, ny = (vy / dist) * d.speed;
+  const sx = -ny * sway, sy = nx * sway;
+  const R = 0.3;
+  if (!blocked(d.x + nx + sx + Math.sign(nx + sx) * R, d.y)) d.x += nx + sx;
+  if (!blocked(d.x, d.y + ny + sy + Math.sign(ny + sy) * R)) d.y += ny + sy;
+  if (d.hit > 0) d.hit--;
+  return dist;
+}
+
+/* --- projection --------------------------------------------------------- */
+
+function project(s) {
+  const sx = s.x - px, sy = s.y - py;
+  const inv = 1 / (planeX * dirY - dirX * planeY);
+  const tx = inv * (dirY * sx - dirX * sy);
+  const depth = inv * (-planeY * sx + planeX * sy);
+  if (depth <= 0.1) return null;
+  const size = (WALLH / depth) * s.scale;
+  return {
+    depth, size,
+    cx: (W / 2) * (1 + tx / depth),
+    cy: HORIZON + (WALLH / depth) * (0.5 - s.h),
+  };
+}
+
+/* --- shooting ----------------------------------------------------------- */
+
+function fire() {
+  if (over || !started || cool > 0) return;
+  cool = 9; flash = 5; shake = 2.5;
+
+  let best = null, bestDepth = 1e9;
+  for (const d of drones) {
+    const p = project(d);
+    if (!p || p.depth > 20) continue;
+    // Under the crosshair, with a few pixels of forgiveness — this is a
+    // thumb on glass, not a mouse.
+    if (Math.abs(p.cx - W / 2) > p.size * 0.42 + 7) continue;
+    const col = Math.min(RAYS - 1, Math.max(0, p.cx / COLW | 0));
+    if (zbuf[col] <= p.depth) continue;            // a wall is in the way
+    if (p.depth < bestDepth) { bestDepth = p.depth; best = d; }
+  }
+  if (!best) return;
+
+  best.hp--; best.hit = 6;
+  if (best.hp > 0) { score += 5; return; }
+  score += (best.hulk ? 90 : 40) + wave * 10;
+  lumens.push({ x: best.x, y: best.y, scale: 0.46, h: 0.18,
+                life: 600, phase: Math.random() * 6.28 });
+  drones.splice(drones.indexOf(best), 1);
+}
+
+/* --- render ------------------------------------------------------------- */
+
+function drawSky() {
+  const g = x.createLinearGradient(0, 0, 0, HORIZON);
+  g.addColorStop(0, "#04030c");
+  g.addColorStop(1, "#140b2e");
+  x.fillStyle = g; x.fillRect(0, 0, W, HORIZON);
+
+  // city haze sitting on the horizon
+  const h = x.createLinearGradient(0, HORIZON - 70, 0, HORIZON);
+  h.addColorStop(0, "rgba(157,78,221,0)");
+  h.addColorStop(1, "rgba(255,46,136,.22)");
+  x.fillStyle = h; x.fillRect(0, HORIZON - 70, W, 70);
+}
+
+function drawFloor() {
+  const g = x.createLinearGradient(0, HORIZON, 0, H);
+  g.addColorStop(0, "#07061a");
+  g.addColorStop(1, "#0d0a24");
+  x.fillStyle = g; x.fillRect(0, HORIZON, W, H - HORIZON);
+
+  /* Bands at whole-tile distances. Only horizontal lines: a line of constant
+     distance is the same line whichever way you're facing, so these stay
+     honest as you turn. Converging verticals would not. */
+  x.strokeStyle = "rgba(25,230,255,.085)";
+  x.lineWidth = 1;
+  x.beginPath();
+  for (let d = 1; d <= 16; d++) {
+    const y = HORIZON + (0.5 * WALLH) / d;
+    if (y > H) continue;
+    x.moveTo(0, y); x.lineTo(W, y);
+  }
+  x.stroke();
+}
+
+/* The same bands on the ceiling. Without them the top of a portrait screen is
+   a large flat nothing, and the corridor stops reading as enclosed. */
+function drawCeilingBands() {
+  x.strokeStyle = "rgba(157,78,221,.075)";
+  x.lineWidth = 1;
+  x.beginPath();
+  for (let d = 1; d <= 16; d++) {
+    const y = HORIZON - (0.5 * WALLH) / d;
+    if (y < 0) continue;
+    x.moveTo(0, y); x.lineTo(W, y);
+  }
+  x.stroke();
+}
+
+function castWalls() {
+  for (let col = 0; col < RAYS; col++) {
+    const camX = 2 * col / RAYS - 1;
+    const rdX = dirX + planeX * camX, rdY = dirY + planeY * camX;
+
+    let mapX = px | 0, mapY = py | 0;
+    const ddX = Math.abs(rdX) < 1e-9 ? 1e30 : Math.abs(1 / rdX);
+    const ddY = Math.abs(rdY) < 1e-9 ? 1e30 : Math.abs(1 / rdY);
+    let stepX, stepY, sideX, sideY;
+    if (rdX < 0) { stepX = -1; sideX = (px - mapX) * ddX; }
+    else         { stepX = 1;  sideX = (mapX + 1 - px) * ddX; }
+    if (rdY < 0) { stepY = -1; sideY = (py - mapY) * ddY; }
+    else         { stepY = 1;  sideY = (mapY + 1 - py) * ddY; }
+
+    let side = 0, tile = "#", guard = 0;
+    while (guard++ < 128) {
+      if (sideX < sideY) { sideX += ddX; mapX += stepX; side = 0; }
+      else               { sideY += ddY; mapY += stepY; side = 1; }
+      tile = tileAt(mapX, mapY);
+      if (SOLID.includes(tile)) break;
+    }
+
+    const perp = Math.max(0.0001, side === 0 ? sideX - ddX : sideY - ddY);
+    zbuf[col] = perp;
+
+    const lineH = WALLH / perp;
+    const top = HORIZON - lineH * 0.5;
+    const f = fogIndex(perp);
+    x.fillStyle = SHADE[tile][side][f];
+    x.fillRect(col * COLW, top, COLW, lineH);
+
+    /* A bright seam where a wall panel meets the next one. Cheap, and it
+       gives the eye something to track as you move — flat colour columns
+       read as a slideshow otherwise. */
+    const wallX = side === 0 ? py + perp * rdY : px + perp * rdX;
+    const frac = wallX - Math.floor(wallX);
+
+    /* Shade across each panel, darkest at its middle. One flat colour per
+       tile turns a long wall into a single slab of colour with nothing for
+       the eye to hold on to as you move past it; this costs one more fill
+       per column and gives the surface a direction. */
+    const dip = (0.34 * (1 - Math.abs(frac - 0.5) * 2) * (1 - f / (FOG - 1)));
+    if (dip > 0.01) {
+      x.fillStyle = "rgba(4,3,12," + dip.toFixed(3) + ")";
+      x.fillRect(col * COLW, top, COLW, lineH);
+    }
+
+    if (frac < 0.045 || frac > 0.955) {
+      x.fillStyle = "rgba(232,244,255," + (0.3 * (1 - f / (FOG - 1))).toFixed(3) + ")";
+      x.fillRect(col * COLW, top, COLW, lineH);
+    }
+    // a lit strip along the base of neon panels
+    if (tile !== "#") {
+      x.fillStyle = "rgba(255,255,255," + (0.22 * (1 - f / (FOG - 1))).toFixed(3) + ")";
+      x.fillRect(col * COLW, top + lineH - Math.max(1, lineH * 0.05),
+                 COLW, Math.max(1, lineH * 0.05));
+    }
+  }
+}
+
+/* Draw something at a projected position, but only in the columns where it
+   is actually in front of the wall behind it. */
+function clipped(p, paint) {
+  const half = p.size / 2;
+  const first = Math.max(0, Math.floor((p.cx - half) / COLW));
+  const last = Math.min(RAYS - 1, Math.ceil((p.cx + half) / COLW));
+  let run = -1;
+  for (let col = first; col <= last + 1; col++) {
+    const vis = col <= last && zbuf[col] > p.depth;
+    if (vis && run < 0) run = col;
+    if (!vis && run >= 0) {
+      x.save();
+      x.beginPath();
+      x.rect(run * COLW, 0, (col - run) * COLW, H);
+      x.clip();
+      paint();
+      x.restore();
+      run = -1;
+    }
+  }
+}
+
+function drawDrone(d) {
+  const p = project(d);
+  if (!p || p.size < 2) return;
+  clipped(p, () => {
+    const r = p.size * 0.3;
+    const glow = x.createRadialGradient(p.cx, p.cy, 0, p.cx, p.cy, r * 2.3);
+    glow.addColorStop(0, d.hit > 0 ? "rgba(255,255,255,.55)" : "rgba(25,230,255,.3)");
+    glow.addColorStop(1, "rgba(4,3,12,0)");
+    x.fillStyle = glow;
+    x.fillRect(p.cx - r * 2.3, p.cy - r * 2.3, r * 4.6, r * 4.6);
+
+    // a hard shell, hexagonal, because a circle reads as a bubble
+    x.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = i * Math.PI / 3 + Math.sin(t / 30 + d.phase) * 0.12;
+      const vx = p.cx + Math.cos(a) * r, vy = p.cy + Math.sin(a) * r * 1.12;
+      i ? x.lineTo(vx, vy) : x.moveTo(vx, vy);
+    }
+    x.closePath();
+    x.fillStyle = d.hit > 0 ? "#ffffff" : "#0b1030";
+    x.fill();
+    x.strokeStyle = d.hit > 0 ? "#ffffff" : d.tint;
+    x.lineWidth = Math.max(1, p.size * 0.035);
+    x.stroke();
+
+    // the eye
+    x.fillStyle = d.hit > 0 ? "#ffffff" : d.tint;
+    x.beginPath();
+    x.ellipse(p.cx, p.cy, r * 0.42, r * 0.26, 0, 0, 6.3);
+    x.fill();
+  });
+}
+
+function drawLumen(l) {
+  const p = project(l);
+  if (!p || p.size < 1.5) return;
+  clipped(p, () => {
+    const r = Math.max(1.5, p.size * 0.3) * (1 + Math.sin(t / 8 + l.phase) * 0.12);
+    const g = x.createRadialGradient(p.cx, p.cy, 0, p.cx, p.cy, r * 3);
+    g.addColorStop(0, "rgba(255,201,60,.85)");
+    g.addColorStop(1, "rgba(255,201,60,0)");
+    x.fillStyle = g;
+    x.fillRect(p.cx - r * 3, p.cy - r * 3, r * 6, r * 6);
+    x.fillStyle = "#ffc93c";
+    x.beginPath(); x.arc(p.cx, p.cy, r, 0, 6.3); x.fill();
+  });
+}
+
+function drawWeapon() {
+  const bob = Math.sin(t / 9) * (stick.on ? 3.4 : 1.1);
+  const bx = W / 2, by = H + bob;
+
+  if (flash > 0) {
+    const g = x.createRadialGradient(bx, by - 96, 0, bx, by - 96, 90);
+    g.addColorStop(0, "rgba(255,201,60,.8)");
+    g.addColorStop(1, "rgba(255,201,60,0)");
+    x.fillStyle = g;
+    x.fillRect(bx - 90, by - 186, 180, 180);
+  }
+
+  // an emitter, seen from behind
+  x.fillStyle = "#0a0a1f";
+  x.strokeStyle = "#19e6ff";
+  x.lineWidth = 2;
+  const kick = flash > 0 ? 6 : 0;
+  x.beginPath();
+  x.moveTo(bx - 50, by);
+  x.lineTo(bx - 31, by - 92 - kick);
+  x.lineTo(bx + 31, by - 92 - kick);
+  x.lineTo(bx + 50, by);
+  x.closePath();
+  x.fill(); x.stroke();
+
+  // vents down the barrel, so it isn't just a trapezoid
+  x.strokeStyle = "rgba(25,230,255,.45)";
+  x.lineWidth = 1;
+  for (let i = 1; i <= 3; i++) {
+    const yy = by - 92 - kick + i * 22;
+    const w2 = 31 + (50 - 31) * (i / 4.2);
+    x.beginPath(); x.moveTo(bx - w2, yy); x.lineTo(bx + w2, yy); x.stroke();
+  }
+
+  x.fillStyle = flash > 0 ? "#ffc93c" : "#2bffcf";
+  x.fillRect(bx - 9, by - 102 - kick, 18, 12);
+}
+
+function drawCrosshair() {
+  const ready = cool === 0;
+  const g = 7, l = 11, cy = HORIZON;
+  const arms = () => {
+    x.beginPath();
+    x.moveTo(W / 2 - g - l, cy); x.lineTo(W / 2 - g, cy);
+    x.moveTo(W / 2 + g, cy);     x.lineTo(W / 2 + g + l, cy);
+    x.moveTo(W / 2, cy - g - l); x.lineTo(W / 2, cy - g);
+    x.moveTo(W / 2, cy + g);     x.lineTo(W / 2, cy + g + l);
+    x.stroke();
+  };
+  // a dark pass underneath, so the sight still reads against a lit drone —
+  // which is exactly when you need to see it
+  x.strokeStyle = "rgba(4,3,12,.75)"; x.lineWidth = 4; arms();
+  x.strokeStyle = ready ? "rgba(43,255,207,.95)" : "rgba(90,106,154,.75)";
+  x.lineWidth = 1.6; arms();
+  x.fillStyle = ready ? "rgba(43,255,207,.95)" : "rgba(90,106,154,.6)";
+  x.fillRect(W / 2 - 1, cy - 1, 2, 2);
+}
+
+function drawMinimap() {
+  const S = 3.4, pad = 8;
+  const mw = MW * S, mh = MH * S;
+  const ox = W - mw - pad, oy = pad;
+
+  x.fillStyle = "rgba(4,3,12,.72)";
+  x.fillRect(ox - 2, oy - 2, mw + 4, mh + 4);
+  x.strokeStyle = "rgba(27,31,74,.9)";
+  x.lineWidth = 1;
+  x.strokeRect(ox - 2, oy - 2, mw + 4, mh + 4);
+
+  for (let r = 0; r < MH; r++) for (let col = 0; col < MW; col++) {
+    const ch = MAP[r][col];
+    if (!SOLID.includes(ch)) continue;
+    x.fillStyle = ch === "#" ? "#222860" : (ch === "=" ? "#17667a" : "#7a2048");
+    x.fillRect(ox + col * S, oy + r * S, S, S);
+  }
+  for (const d of drones) {
+    x.fillStyle = d.tint;
+    x.fillRect(ox + d.x * S - 1.4, oy + d.y * S - 1.4, 2.8, 2.8);
+  }
+  // the player, with the direction being faced
+  x.strokeStyle = "#ffc93c"; x.lineWidth = 1.4;
+  x.beginPath();
+  x.moveTo(ox + px * S, oy + py * S);
+  x.lineTo(ox + (px + dirX * 2.2) * S, oy + (py + dirY * 2.2) * S);
+  x.stroke();
+  x.fillStyle = "#ffc93c";
+  x.fillRect(ox + px * S - 1.5, oy + py * S - 1.5, 3, 3);
+}
+
+function drawStick() {
+  if (!stick.on) return;
+  const r = 34;
+  x.strokeStyle = "rgba(25,230,255,.3)"; x.lineWidth = 1.5;
+  x.beginPath(); x.arc(stick.ox, stick.oy, r, 0, 6.3); x.stroke();
+  const m = Math.min(1, Math.hypot(stick.dx, stick.dy) / 70);
+  const a = Math.atan2(stick.dy, stick.dx);
+  x.fillStyle = "rgba(43,255,207,.55)";
+  x.beginPath();
+  x.arc(stick.ox + Math.cos(a) * r * m, stick.oy + Math.sin(a) * r * m, 9, 0, 6.3);
+  x.fill();
+}
+
+/* --- loop --------------------------------------------------------------- */
+
+function step() {
+  t++;
+  if (cool > 0) cool--;
+  if (flash > 0) flash--;
+  if (hurt > 0) hurt--;
+  shake *= 0.84;
+
+  if (started && !over) {
+    // steering: thumbstick first, keyboard as well for anyone on a desktop
+    let turn = 0, walk = 0;
+    if (stick.on) {
+      turn = Math.max(-1, Math.min(1, stick.dx / 68));
+      walk = Math.max(-1, Math.min(1, -stick.dy / 68));
+    }
+    if (keys.left) turn -= 1;
+    if (keys.right) turn += 1;
+    if (keys.up) walk += 1;
+    if (keys.down) walk -= 1;
+    if (keys.fire) fire();
+
+    rotate(turn * 0.046);
+    const sp = walk * 0.062;
+    if (sp) shift(dirX * sp, dirY * sp);
+
+    for (let i = drones.length - 1; i >= 0; i--) {
+      const d = drones[i];
+      const dist = stepDrone(d);
+      if (dist < 0.62 && hurt === 0) {
+        light--; hurt = 70; shake = 11;
+        /* It gets thrown back into the grid rather than destroyed. Removing
+           it on contact meant a drone that reached you counted as dealt
+           with — and if it was the last one of the wave, being hit cleared
+           the wave and paid the clear bonus. A wave now ends only when you
+           have actually shot everything in it. */
+        const fresh = makeDrone(d.hulk, wave);
+        d.x = fresh.x; d.y = fresh.y;
+        if (light <= 0) { finish(); break; }
+      }
+    }
+
+    for (let i = lumens.length - 1; i >= 0; i--) {
+      const l = lumens[i];
+      if (--l.life <= 0) { lumens.splice(i, 1); continue; }
+      if (Math.hypot(l.x - px, l.y - py) < 0.55) {
+        score += 25; lumens.splice(i, 1); flash = Math.max(flash, 2);
+      }
+    }
+
+    if (!over && !drones.length) {
+      wave++; score += 100 + wave * 20;
+      startWave(wave);
+      banner("wave " + wave, "they keep coming. tap to carry on");
+    }
+  }
+
+  // --- draw
+  x.save();
+  if (shake > 0.3) {
+    x.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+  }
+  drawSky();
+  drawCeilingBands();
+  drawFloor();
+  castWalls();
+
+  // far to near, so nearer sprites land on top
+  [...drones.map(d => ({ e: d, kind: 0 })),
+   ...lumens.map(l => ({ e: l, kind: 1 }))]
+    .map(o => ({ ...o, d: Math.hypot(o.e.x - px, o.e.y - py) }))
+    .sort((a, b) => b.d - a.d)
+    .forEach(o => o.kind ? drawLumen(o.e) : drawDrone(o.e));
+
+  drawWeapon();
+  drawCrosshair();
+  x.restore();
+
+  drawMinimap();
+  drawStick();
+
+  if (hurt > 0) {
+    x.fillStyle = "rgba(255,46,136," + (0.3 * (hurt / 70)).toFixed(3) + ")";
+    x.fillRect(0, 0, W, H);
+  }
+
+  document.getElementById("s").textContent = score;
+  document.getElementById("w").textContent = wave;
+  document.getElementById("l").textContent = Math.max(0, light);
+  requestAnimationFrame(step);
+}
+
+function banner(title, sub) {
+  started = false;
+  const m = document.getElementById("msg");
+  m.innerHTML = `<h1>${title}</h1><p>${sub}</p><button id="go">go</button>`;
+  m.classList.remove("hide");
+  document.getElementById("go").onclick = () => {
+    m.classList.add("hide"); started = true;
+  };
+}
+
+function finish() {
+  over = true;
+  SL.submit(score);
+  const m = document.getElementById("msg");
+  m.innerHTML = `<h1>breach failed</h1>
+    <p class="score">${score} points · wave ${wave}</p>
+    <p>your best run is on the group board.</p>
+    <button id="go">again</button>`;
+  m.classList.remove("hide");
+  document.getElementById("go").onclick = () => {
+    m.classList.add("hide"); reset(true); started = true;
+  };
+}
+
+document.getElementById("go").onclick = () => {
+  document.getElementById("msg").classList.add("hide");
+  reset(true); started = true;
+};
+reset(true);
+step();
+</script>
+</body>
+</html>

@@ -35,7 +35,9 @@
   .sub b { color: var(--ink); font-weight: 600; }
 
   .rack { margin-top: 42px; display: grid; gap: 16px; }
-  @media (min-width: 640px) { .rack { grid-template-columns: repeat(3, 1fr); } }
+  /* Two across, not three — with four cabinets a three-column rack leaves
+     the last one stranded on a row of its own. */
+  @media (min-width: 560px) { .rack { grid-template-columns: repeat(2, 1fr); } }
 
   .cab {
     display: block; text-decoration: none; color: inherit;
@@ -80,7 +82,7 @@
   <p class="kicker">SpreadLight</p>
   <h1>ARCADE</h1>
   <p class="sub">
-    Three games, sixty seconds each. Beat your own best and you pick up
+    Four games, a minute each. Beat your own best and you pick up
     <b>Lumens</b> — the community's score, not a token. Scores only count when
     you open a game from the SpreadLight group, so your run lands under your name.
   </p>
@@ -105,6 +107,13 @@
       <div class="meta">
         <div class="name">Light Rally</div>
         <div class="line">Keep the light in play.</div>
+      </div>
+    </a>
+    <a class="cab" href="/arcade/neonbreach.html">
+      <img src="/arcade/neonbreach.png" alt="Neon Breach" width="640" height="360">
+      <div class="meta">
+        <div class="name">Neon Breach</div>
+        <div class="line">First person. Inside the grid, with them.</div>
       </div>
     </a>
   </div>

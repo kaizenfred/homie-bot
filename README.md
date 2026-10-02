@@ -316,19 +316,51 @@ All three run 90 seconds, take one `/hint`, and only one round runs at a time.
 
 ## The arcade
 
-Three original games, built for phones, with group high-score boards.
+Four original games, built for phones, with group high-score boards.
 
 | game | genre |
 |---|---|
 | **Shadow Wave** | fixed shooter — you're the last beacon, shadows descend |
 | **Lumen Run** | maze collector — clear the grid, grab a sunburst and they run from you |
 | **Light Rally** | paddle rally — every return speeds it up |
+| **Neon Breach** | first person — a raycast arena, drones closing in, one thumb |
 
 These are originals, not clones. Pac-Man is Bandai Namco's and Space Invaders
 is Taito's — the sprites, names and characters are protected even if you
 rewrite the code. Game *mechanics* aren't, so these use the same genres with
 SpreadLight's own art and names. That's the difference between homage and a
 takedown notice on a brand you're trying to build trust with.
+
+### Neon Breach
+
+A raycaster: 180 vertical columns, each one a ray walked through the map with
+DDA. How far the ray travels sets how tall that slice of wall is and how far
+it fades out. Drones and lumens are flat shapes projected into the same space
+and clipped against the depth written down per column, which is what lets one
+stand behind a pillar.
+
+Controls are built for a thumb, not a keyboard: **hold anywhere** and the
+touch point becomes a stick — slide to walk and turn — and a **tap** that
+doesn't move is a shot. Two on-screen pads would eat a phone screen this
+small. Keyboard works too, for anyone opening it on a desktop.
+
+A drone that reaches you costs a light and gets thrown back into the arena
+rather than destroyed, so a wave ends only when you have actually shot
+everything in it.
+
+### Difficulty
+
+All four ramp with the wave or level, and all of them cap. The ceilings are
+deliberate: in Lumen Run the shadows never get faster than 2.3 against the
+runner's 2.4, because a chase you cannot outrun stops being a test of skill;
+in Light Rally the ball stops accelerating at about 11px a frame, past which
+it crosses the paddle between two visible frames and there is nothing left to
+react to.
+
+`tests/test_mazes.py` checks that every lumen in Lumen Run and every floor
+tile in Neon Breach can actually be reached. That test exists because 17 of
+Lumen Run's lumens once could not be — see the comment at the top of its
+`MAZE`.
 
 ### Getting the arcade live
 
@@ -358,9 +390,15 @@ systemctl reload caddy
 ARCADE_URL=https://play.spreadlight.io
 ```
 
-**4. Register each game with BotFather** — `/newgame`, three times. The
-**short name must match exactly**: `shadowwave`, `lumenrun`, `lightrally`.
-BotFather asks for a title, description and photo each time.
+**4. Register each game with BotFather** — `/newgame`, once per game. The
+**short name must match exactly**: `shadowwave`, `lumenrun`, `lightrally`,
+`neonbreach`. BotFather asks for a title, description and photo each time;
+`python3 tools/make_game_covers.py` writes the 640×360 photos it wants.
+
+> `/newgame` requires the bot to be **in inline mode first** — BotFather
+> answers "You have no inline bots yet" otherwise, which looks like a wrong
+> turn rather than a missing prerequisite. `/setinline` on the bot, then
+> `/newgame`. A new game added later needs only the `/newgame` step.
 
 **5. Restart.** `/play` in the group now shows the menu, `/scores` shows the
 boards.

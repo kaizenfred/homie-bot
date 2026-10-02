@@ -39,13 +39,16 @@ function reset() {
 
 function spawn() {
   foes = [];
-  const cols = Math.min(4 + wave, 8), rows = Math.min(2 + Math.floor(wave / 2), 5);
+  const cols = Math.min(4 + wave, 8);
+  const rows = Math.min(2 + Math.floor((wave + 1) / 2), 5);   // ramps a wave sooner
   const gapX = 40, gapY = 34, left = (W - (cols - 1) * gapX) / 2;
   for (let r = 0; r < rows; r++)
     for (let col = 0; col < cols; col++)
       foes.push({
         x: left + col * gapX, y: 56 + r * gapY,
-        hp: r === 0 ? 2 : 1, r: 11, phase: Math.random() * 6.28,
+        // from wave 4 the second rank is armoured too
+        hp: r === 0 || (wave >= 4 && r === 1) ? 2 : 1,
+        r: 11, phase: Math.random() * 6.28,
       });
   dir = 1; drop = 0; cool = 0;
 }
@@ -125,20 +128,20 @@ function step() {
     shots = shots.filter(s => s.y > -10);
 
     // formation
-    const speed = 0.28 + wave * 0.07 + (1 - foes.length / 30) * 0.5;
+    const speed = 0.34 + wave * 0.09 + (1 - foes.length / 30) * 0.62;
     let edge = false;
     foes.forEach(f => {
       f.x += dir * speed;
       if (f.x < 16 || f.x > W - 16) edge = true;
     });
-    if (edge) { dir *= -1; foes.forEach(f => f.y += 11); }
+    if (edge) { dir *= -1; foes.forEach(f => f.y += 13); }   // drop further
 
-    // they spit shadow back
+    // they spit shadow back — faster, and more often
     cool--;
     if (cool <= 0 && foes.length) {
       const f = foes[(Math.random() * foes.length) | 0];
-      dust.push({ x: f.x, y: f.y + 10, vy: 2.4 + wave * 0.15 });
-      cool = Math.max(24, 70 - wave * 4);
+      dust.push({ x: f.x, y: f.y + 10, vy: 2.6 + wave * 0.2 });
+      cool = Math.max(15, 64 - wave * 5);
     }
     dust.forEach(d => d.y += d.vy);
     dust = dust.filter(d => d.y < H + 10);

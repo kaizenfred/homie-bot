@@ -37,6 +37,7 @@ GAMES = {
     "shadowwave": ("shadowwave.html", "Shadow Wave", 250_000),
     "lumenrun": ("lumenrun.html", "Lumen Run", 250_000),
     "lightrally": ("lightrally.html", "Light Rally", 250_000),
+    "neonbreach": ("neonbreach.html", "Neon Breach", 250_000),
 }
 
 TOKEN_TTL = 3600
