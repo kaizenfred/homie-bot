@@ -156,8 +156,7 @@ function finish() {
   m.innerHTML = `<h1>dropped it</h1>
     <p class="score">${score} points</p>
     <p>your best run is on the group board.</p>
-    <button id="go">again</button>
-    <button class="ghost" onclick="SL.share()">share score</button>`;
+    <button id="go">again</button>`;
   m.classList.remove("hide");
   document.getElementById("go").onclick = start;
 }

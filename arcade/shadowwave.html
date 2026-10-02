@@ -206,8 +206,7 @@ function finish() {
   m.innerHTML = `<h1>the shadows won</h1>
     <p class="score">${score} points · wave ${wave}</p>
     <p>every run banks your best score on the group board.</p>
-    <button id="go">again</button>
-    <button class="ghost" onclick="SL.share()">share score</button>`;
+    <button id="go">again</button>`;
   m.classList.remove("hide");
   document.getElementById("go").onclick = start;
 }

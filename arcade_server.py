@@ -51,33 +51,58 @@ def _secret():
     ).digest()
 
 
-def make_token(user_id, chat_id, game, message_id=None, inline_id=None):
+def make_token(user_id, chat_id, game, card_chat=None,
+               message_id=None, inline_id=None):
+    """Sign one run.
+
+    Two chat ids, not one, and they are usually different:
+
+      chat_id   — where the run BELONGS. Lumens, /scores and the announcement
+                  all key off this, so it has to be the group.
+      card_chat — where the game message physically IS. Since game cards go to
+                  the player's DMs, this is their private chat. Telegram's own
+                  setGameScore needs the chat that actually holds the message;
+                  given the group it cannot find message_id and quietly fails,
+                  which is exactly how the native leaderboard went missing.
+    """
     exp = int(time.time()) + TOKEN_TTL
-    body = f"{user_id}:{chat_id}:{game}:{message_id or 0}:{inline_id or ''}:{exp}"
+    body = (f"{user_id}:{chat_id}:{card_chat or 0}:{game}:"
+            f"{message_id or 0}:{inline_id or ''}:{exp}")
     sig = hmac.new(_secret(), body.encode(), hashlib.sha256).hexdigest()[:32]
     return f"{body}:{sig}"
 
 
 def read_token(token):
-    try:
-        user_id, chat_id, game, message_id, inline_id, exp, sig = token.split(":")
-    except ValueError:
+    # inline_message_id is an opaque Telegram string and may itself contain a
+    # colon, so the fixed fields are taken from the ends and whatever is left
+    # in the middle is the inline id. A plain split() lost those runs.
+    parts = token.split(":")
+    if len(parts) < 7:
         return None
-    body = f"{user_id}:{chat_id}:{game}:{message_id}:{inline_id}:{exp}"
+    user_id, chat_id, card_chat, game, message_id = parts[:5]
+    exp, sig = parts[-2], parts[-1]
+    inline_id = ":".join(parts[5:-2])
+    body = (f"{user_id}:{chat_id}:{card_chat}:{game}:"
+            f"{message_id}:{inline_id}:{exp}")
     want = hmac.new(_secret(), body.encode(), hashlib.sha256).hexdigest()[:32]
     if not hmac.compare_digest(sig, want):
         return None
-    if int(exp) < time.time():
+    try:
+        if int(exp) < time.time():
+            return None
+        return {
+            "user_id": int(user_id), "chat_id": int(chat_id),
+            "card_chat": int(card_chat) or None, "game": game,
+            "message_id": int(message_id) or None, "inline_id": inline_id or None,
+        }
+    except ValueError:
         return None
-    return {
-        "user_id": int(user_id), "chat_id": int(chat_id), "game": game,
-        "message_id": int(message_id) or None, "inline_id": inline_id or None,
-    }
 
 
-def play_url(user_id, chat_id, game, message_id=None, inline_id=None):
+def play_url(user_id, chat_id, game, card_chat=None,
+             message_id=None, inline_id=None):
     base = config.ARCADE_URL.rstrip("/")
-    token = make_token(user_id, chat_id, game, message_id, inline_id)
+    token = make_token(user_id, chat_id, game, card_chat, message_id, inline_id)
     return f"{base}/arcade/{GAMES[game][0]}?g={game}&t={token}"
 
 

@@ -7,9 +7,6 @@ const SL = (() => {
   const game = params.get("g") || "";
   let sent = 0;
 
-  /* Telegram's games.js is present when launched from a chat. */
-  const tg = window.TelegramGameProxy;
-
   async function submit(score) {
     score = Math.max(0, Math.floor(score));
     if (!token || score <= sent) return;
@@ -23,7 +20,11 @@ const SL = (() => {
     } catch (e) { /* offline: the run still counts locally */ }
   }
 
-  function share() { if (tg && tg.shareScore) tg.shareScore(); }
+  /* Deliberately no share button.
+     TelegramGameProxy.shareScore() does not share a score — it posts the GAME
+     into a chat, which is Telegram's design and the opposite of keeping game
+     cards private to the player. Homie announces a new best in the group
+     himself, so the sharing already happens, from the bot, once. */
 
   /* input: keyboard + touch, since most of the fam is on a phone */
   function input() {
@@ -80,5 +81,5 @@ const SL = (() => {
     scale();
   }
 
-  return { submit, share, input, touch, fit, game };
+  return { submit, input, touch, fit, game };
 })();

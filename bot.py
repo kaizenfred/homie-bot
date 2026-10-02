@@ -348,14 +348,17 @@ async def on_game_launch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if short not in arcade_server.GAMES:
         await q.answer("unknown game", show_alert=True)
         return
-    # The card now lives in the player's DM, but Lumens and the leaderboard
-    # belong to the group. Scoring a run against the private chat would file
-    # it somewhere nobody can see.
-    chat_id = db.main_chat(config.MAIN_CHAT_ID)
+    # Two different chats, and conflating them is what broke the leaderboard.
+    # The card lives in the player's DM; Lumens and /scores belong to the
+    # group. Telegram's own scoreboard has to be written back to the chat the
+    # card is actually in, everything else has to be filed against the group.
+    board_chat = db.main_chat(config.MAIN_CHAT_ID)
+    card_chat = q.message.chat.id if q.message else None
     if q.message and q.message.chat.type != "private":
-        chat_id = q.message.chat.id
+        board_chat = q.message.chat.id
     url = arcade_server.play_url(
-        q.from_user.id, chat_id, short,
+        q.from_user.id, board_chat, short,
+        card_chat=card_chat,
         message_id=q.message.message_id if q.message else None,
         inline_id=q.inline_message_id,
     )
@@ -977,16 +980,36 @@ async def on_arcade_score(claim, score):
 
     best, _ = db.record_score(user_id, chat_id, game, username, score)
 
-    # Telegram's own scoreboard on the game message
+    # Telegram's own scoreboard, written onto the game card itself. This has
+    # to target the chat the card is IN (the player's DM), not the chat the
+    # score is filed AGAINST (the group) — pointing it at the group means
+    # Telegram can't find the message and no leaderboard ever appears.
+    #
+    # The API takes chat_id+message_id OR inline_message_id, never both.
     try:
-        await bot.set_game_score(
-            user_id=user_id, score=score, chat_id=chat_id,
-            message_id=claim["message_id"],
-            inline_message_id=claim["inline_id"],
-            disable_edit_message=False,
-        )
+        if claim.get("inline_id"):
+            await bot.set_game_score(
+                user_id=user_id, score=score,
+                inline_message_id=claim["inline_id"],
+                disable_edit_message=False,
+            )
+        elif claim.get("card_chat") and claim.get("message_id"):
+            await bot.set_game_score(
+                user_id=user_id, score=score,
+                chat_id=claim["card_chat"], message_id=claim["message_id"],
+                disable_edit_message=False,
+            )
+        else:
+            log.warning("no game message to score against: %s", claim)
     except Exception as e:
-        log.debug("set_game_score skipped: %s", e)
+        # A lower score than the one already stored is refused by design, so
+        # that one is expected. Anything else means the board is broken and
+        # should be visible in the log rather than swallowed at debug level.
+        msg = str(e).lower()
+        if "not modified" in msg or "not_modified" in msg:
+            log.debug("set_game_score: score not a new best")
+        else:
+            log.warning("set_game_score failed (%s): %s", claim, e)
 
     if not best or not config.POINTS_ENABLED:
         return
