@@ -16,11 +16,49 @@ from urllib.parse import urlparse
 import config
 
 ADDRESS_RE = re.compile(r"0x[a-fA-F0-9]{40}")
+
+# Telegram's own entity parser is the authority on what counts as a link — it
+# carries the real TLD list and catches hidden text links too. This regex is
+# only a backstop for a bare domain the entities somehow miss, and it is now
+# gated on a known TLD.
+#
+# The version this replaces accepted any `word.word`, which meant a missing
+# space after a full stop read as a domain: "ok.Thanks", "no.Im good",
+# "wait.What happened" were all deleted with a public callout. On phones, in a
+# casual chat, that fires constantly — it was the single most common way a
+# real member lost a message.
+# Deliberately requires a scheme, a www. or a path. A BARE domain is left to
+# the entity pass, which knows the real TLD list — because plenty of real TLDs
+# are also ordinary English words (.so .to .it .me .life .link), and gating on
+# a word list alone still deleted "hmm...ok.So". Anything unmistakably
+# URL-shaped is caught here; anything subtler is caught there.
 URL_RE = re.compile(
-    r"(?:https?://)?(?:www\.)?"
-    r"((?:[a-z0-9-]+\.)+[a-z]{2,})(/[^\s]*)?",
+    r"(?:(?P<scheme>https?://)|(?P<www>www\.))?"
+    r"((?:[a-z0-9-]+\.)+(?P<tld>[a-z]{2,24}))(?![a-z])"
+    r"(?P<path>/[^\s]*)?",
     re.IGNORECASE,
 )
+
+
+def _url_shaped(match):
+    return bool(match.group("scheme") or match.group("www")
+                or match.group("path"))
+
+
+# Enough to cover anything a member plausibly links plus the cheap TLDs scam
+# sites live on. A TLD that isn't here still gets caught by the entity pass.
+KNOWN_TLDS = {
+    "com", "net", "org", "io", "co", "app", "dev", "xyz", "finance", "me",
+    "info", "biz", "club", "online", "site", "store", "shop", "tech", "cloud",
+    "live", "link", "top", "vip", "pro", "fun", "space", "website", "digital",
+    "exchange", "capital", "fund", "money", "cash", "gold", "network", "news",
+    "today", "world", "life", "art", "social", "chat", "gg", "ai", "tv", "fm",
+    "cc", "to", "ly", "sh", "so", "st", "ws", "gov", "edu", "mil", "int",
+    "uk", "us", "ca", "de", "fr", "es", "it", "nl", "se", "no", "fi", "dk",
+    "pl", "ru", "ua", "tr", "in", "cn", "jp", "kr", "au", "nz", "br", "mx",
+    "ar", "cl", "za", "ng", "ke", "ae", "sa", "il", "sg", "hk", "tw", "th",
+    "vn", "ph", "id", "my", "pk", "bd", "eu", "asia",
+}
 # phrases that mean "someone DMed me"
 DM_RE = re.compile(
     r"\b(?:dm'?e?d me|dmd me|messaged me|pm'?e?d me|inboxed me|"
@@ -70,13 +108,29 @@ def _tme_allowed(path, bot_username):
 
 
 def bad_links(message, bot_username):
-    """Links in the message that point anywhere we haven't approved."""
+    """Links in the message that point anywhere we haven't approved.
+
+    Reads captions as well as text — a fake contract address pasted under a
+    photo is the same attack as one typed in a message, and for a while this
+    only looked at `text`.
+    """
     urls = []
-    # Telegram's own entity parsing catches hidden text links too
-    for entity, text in message.parse_entities(["url", "text_link"]).items():
-        urls.append(entity.url if entity.type == "text_link" else text)
-    for match in URL_RE.finditer(message.text or ""):
-        urls.append(match.group(0))
+    # Telegram's own entity parsing, which also catches hidden text links.
+    # Captions carry their own entity list, hence both calls.
+    for parse, kinds in ((message.parse_entities, ("url", "text_link")),
+                         (message.parse_caption_entities,
+                          ("url", "text_link"))):
+        try:
+            found = parse(list(kinds))
+        except Exception:
+            continue
+        for entity, text in found.items():
+            urls.append(entity.url if entity.type == "text_link" else text)
+
+    for body in (message.text, message.caption):
+        for match in URL_RE.finditer(body or ""):
+            if _url_shaped(match) and match.group("tld").lower() in KNOWN_TLDS:
+                urls.append(match.group(0))
 
     bad = []
     for raw in urls:

@@ -19,12 +19,31 @@ LEET = str.maketrans({
 # a censored letter is usually one of these
 WILDCARD = r"[*#%^]"
 
+# What may sit BETWEEN two letters of one word: punctuation only, and not much
+# of it. This used to be [\W_]* — any run of non-word characters, whitespace
+# included — which quietly turned every filtered word into a phrase matcher.
+# "let's hit it" matched "shit": the apostrophe satisfied the left boundary,
+# then s + <space> + hit. Ordinary members were losing messages and collecting
+# strikes for it. Deliberate spacing ("f u c k") is handled by despace()
+# instead, which is a different shape of evasion and needs a different rule.
+SEP = r"[^\w\s]{0,2}"
+
+# Three or more single letters in a row, separated by anything non-word:
+# "f u c k", "s.h.i.t", "b-i-t-c-h". Nobody writes like that by accident.
+_SPACED_OUT = re.compile(r"(?<![a-z0-9])(?:[a-z][\W_]+){2,}[a-z](?![a-z0-9])")
+
 
 def normalise(text):
     text = text.lower().translate(LEET)
     # collapse stretched letters: fuuuuck -> fuck, asshole -> ashole.
     # the word list is collapsed the same way, so both sides line up.
     return re.sub(r"(.)\1+", r"\1", text)
+
+
+def despace(text):
+    """Join runs of spaced-out single letters back into words."""
+    return _SPACED_OUT.sub(
+        lambda m: re.sub(r"[\W_]+", "", m.group(0)), text)
 
 
 def _load(filename, fallback):
@@ -44,7 +63,8 @@ def _word_regex(word):
     tokens = []
     for token in normalise(word).split():
         chars = [f"(?:{re.escape(ch)}|{WILDCARD})" for ch in token]
-        tokens.append(r"[\W_]*".join(chars))
+        tokens.append(SEP.join(chars))
+    # between the WORDS of a phrase, whitespace is expected and fine
     return r"[\W_]+".join(tokens) + r"(?:s|es|ed|er|ers|ing|in|y)?"
 
 
@@ -74,7 +94,10 @@ def reload_lists():
 
 def has_profanity(text):
     pattern = _profanity()
-    return bool(pattern and pattern.search(normalise(text)))
+    if not pattern:
+        return False
+    clean = normalise(text or "")
+    return bool(pattern.search(clean) or pattern.search(despace(clean)))
 
 
 def is_marketer_pitch(text):
@@ -82,6 +105,7 @@ def is_marketer_pitch(text):
     pattern = _marketer()
     if not pattern:
         return False
+    text = text or ""
     hits = pattern.findall(normalise(text))
     # one keyword can be innocent ("nice marketing"), two is a pitch.
     # a very long message with one hit is also a pitch — nobody writes

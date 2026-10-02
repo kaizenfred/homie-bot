@@ -17,11 +17,12 @@ from telegram import (
 from telegram.constants import ChatAction, ParseMode
 from telegram.error import Forbidden
 from telegram.ext import (
-    Application, CallbackQueryHandler, CommandHandler, ContextTypes,
-    InlineQueryHandler,
+    Application, ApplicationHandlerStop, CallbackQueryHandler, CommandHandler,
+    ContextTypes, InlineQueryHandler,
     MessageHandler, filters,
 )
 
+import admins
 import arcade_server
 import community
 import config
@@ -42,12 +43,25 @@ log = logging.getLogger("spreadlight")
 
 
 def is_admin(update: Update) -> bool:
-    user = update.effective_user
-    if not user:
-        return False
-    if user.id in config.ADMIN_IDS:
-        return True
-    return bool(user.username) and user.username.lower() in config.ADMIN_USERNAMES
+    """Fast, identity-only check. See admins.py for why usernames don't count."""
+    return admins.is_admin(update.effective_user)
+
+
+async def admin_ok(update: Update, ctx) -> bool:
+    """The check every admin command uses. Verifies a handle claim properly."""
+    return await admins.verify(ctx, update)
+
+
+def body_of(msg) -> str:
+    """The text of a message, wherever Telegram put it.
+
+    A caption is text. Photos and videos carry theirs in `caption`, and for a
+    long time the guards only ever read `text` — so a fake contract address
+    posted under an image walked straight past the shield.
+    """
+    if not msg:
+        return ""
+    return msg.text or msg.caption or ""
 
 
 _NAME_RE = None
@@ -90,7 +104,7 @@ def display_name(user) -> str:
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type == "private":
-        if is_admin(update):
+        if await admin_ok(update, ctx):
             db.kv_set("founder_dm", update.effective_chat.id)
         if ctx.args and ctx.args[0] == "play":
             # Arrived from the group's arcade menu, having never opened a
@@ -106,6 +120,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "front of Fred"
             )
             return
+    extra = ("\n\n🛡 /mod — moderation commands · /health — my permissions"
+             if admins.is_admin(update.effective_user) else "")
     await update.effective_message.reply_text(
         "yo, I'm Homie ✨ I hang out here.\n\n"
         "/howtobuy — never bought crypto? start here\n"
@@ -114,7 +130,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "/stats — community numbers\n"
         "/play — arcade · /rank — your Lumens\n"
         "/ask — ask me anything about the project\n\n"
-        "Tag me or reply to me and I'll answer."
+        "Tag me or reply to me and I'll answer." + extra
     )
 
 
@@ -225,6 +241,9 @@ async def cmd_ask(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     author = display_name(update.effective_user)
     db.log_message(chat_id, "user", author, question)
+    if not ai_allowed(ctx, chat_id, update.effective_user.id):
+        await msg.reply_text("gimme a sec fam, one at a time 😄")
+        return
     await ctx.bot.send_chat_action(chat_id, ChatAction.TYPING)
     answer = await persona.respond_to(chat_id, ctx.bot.first_name, author)
     if answer:
@@ -233,7 +252,7 @@ async def cmd_ask(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_sweep(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
+    if not await admin_ok(update, ctx):
         return
     msg = await update.effective_message.reply_text("Sweeping for deleted accounts…")
     checked, removed = await moderation.sweep(ctx.bot, update.effective_chat.id)
@@ -242,7 +261,7 @@ async def cmd_sweep(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_say(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Broadcast to the main chat: /say your message here"""
-    if not is_admin(update):
+    if not await admin_ok(update, ctx):
         return
     text = " ".join(ctx.args)
     if not text:
@@ -252,7 +271,7 @@ async def cmd_say(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_leads(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
+    if not await admin_ok(update, ctx):
         return
     rows = db.recent_leads(10)
     if not rows:
@@ -267,7 +286,7 @@ async def cmd_leads(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_reload(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Pick up edits to banned_words.txt / marketer_words.txt without a restart."""
-    if not is_admin(update):
+    if not await admin_ok(update, ctx):
         return
     guard.reload_lists()
     await update.effective_message.reply_text("word lists reloaded")
@@ -275,29 +294,294 @@ async def cmd_reload(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_forgive(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Reply to someone with /forgive to wipe their strikes and unmute them."""
-    if not is_admin(update):
-        return
-    target = update.effective_message.reply_to_message
-    if not target:
-        await update.effective_message.reply_text("reply to the person with /forgive")
+    if not await admin_ok(update, ctx):
         return
     chat_id = update.effective_chat.id
-    user_id = target.from_user.id
+    user_id, label, rest = await _target_of(update, ctx)
+    if not user_id:
+        await update.effective_message.reply_text(label)
+        return
     db.clear_strikes(user_id, chat_id)
+    # The pitch flag is the one that bites hardest when it's wrong: a member
+    # the keyword filter mistook for an agency gets routed to the leads pile
+    # for good and Homie never replies to them in DM again. Forgiveness has
+    # to mean that too.
+    db.clear_pitcher(user_id)
+    disarm_captcha(ctx, chat_id, user_id)
+    try:
+        chat = await ctx.bot.get_chat(chat_id)
+        perms = chat.permissions or ChatPermissions(
+            can_send_messages=True, can_send_other_messages=True,
+            can_add_web_page_previews=True, can_send_polls=True,
+            can_invite_users=True,
+        )
+        await ctx.bot.restrict_chat_member(chat_id, user_id, permissions=perms)
+    except Exception:
+        pass
+    await update.effective_message.reply_text(f"{label} is clean, we move on")
+
+
+# --- manual moderation ------------------------------------------------------
+#
+# Everything above this line is automatic. None of it is a substitute for an
+# owner being able to act: the shield catches a pattern, but a human spotting
+# a raid, a troll or a bad actor needs to be able to say so directly, and
+# needs to be able to undo the bot when it gets somebody wrong.
+
+async def _target_of(update, ctx):
+    """Who an admin command is aimed at, and what's left of the arguments.
+
+    Returns (user_id, label, rest). `rest` matters: with a reply the whole
+    argument list is the reason, but when the target came from the arguments
+    the first one has been used up. Getting that wrong silently ate the
+    reason on "/ban spamming" and read a user id as a mute duration.
+    """
+    msg = update.effective_message
+    args = list(ctx.args or [])
+    if msg.reply_to_message and msg.reply_to_message.from_user:
+        return (msg.reply_to_message.from_user.id,
+                display_name(msg.reply_to_message.from_user), args)
+    if args:
+        arg = args[0].lstrip("@")
+        rest = args[1:]
+        if arg.lstrip("-").isdigit():
+            return int(arg), f"user {arg}", rest
+        found = db.find_member(arg, update.effective_chat.id)
+        if found:
+            return found["user_id"], found["first_name"] or f"@{arg}", rest
+        # Telegram gives bots no way to turn a handle into an id unless the
+        # bot has seen that person before. Say that plainly instead of
+        # failing in a way that looks like the command is broken.
+        return None, (
+            f"I've never seen @{arg} post here, so I can't look up their id. "
+            "Reply to one of their messages instead, or give me the numeric "
+            "id — /id while replying to them shows it."), rest
+    return None, "reply to someone, or give me an @handle or a user id", args
+
+
+async def cmd_ban(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin: /ban (as a reply, or with a handle/id) [reason]"""
+    if not await admin_ok(update, ctx):
+        return
+    chat_id = update.effective_chat.id
+    user_id, label, rest = await _target_of(update, ctx)
+    if not user_id:
+        await update.effective_message.reply_text(label)
+        return
+    if admins.is_admin_id(user_id) or user_id in await admins.chat_admin_ids(
+            ctx, chat_id):
+        await update.effective_message.reply_text("not banning an admin fam")
+        return
+    reason = " ".join(rest) or "no reason given"
+    try:
+        await ctx.bot.ban_chat_member(chat_id, user_id)
+    except Exception as e:
+        await update.effective_message.reply_text(f"couldn't ban them: {e}")
+        return
+    db.mark_removed(user_id, chat_id)
+    await update.effective_message.reply_text(
+        f"banned {label} — {reason}\nundo with <code>/unban {user_id}</code>",
+        parse_mode=ParseMode.HTML)
+
+
+async def cmd_unban(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin: /unban <id or @handle>. Lets a banned person rejoin."""
+    if not await admin_ok(update, ctx):
+        return
+    chat_id = update.effective_chat.id
+    user_id, label, rest = await _target_of(update, ctx)
+    if not user_id:
+        await update.effective_message.reply_text(label)
+        return
+    try:
+        # only_if_banned keeps this from silently kicking a current member
+        await ctx.bot.unban_chat_member(chat_id, user_id, only_if_banned=True)
+    except Exception as e:
+        await update.effective_message.reply_text(f"couldn't unban them: {e}")
+        return
+    db.clear_strikes(user_id, chat_id)
+    await update.effective_message.reply_text(
+        f"{label} can come back in. they'll need a fresh invite link")
+
+
+async def cmd_mute(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin: /mute [minutes] as a reply. Default MUTE_MINUTES."""
+    if not await admin_ok(update, ctx):
+        return
+    chat_id = update.effective_chat.id
+    user_id, label, rest = await _target_of(update, ctx)
+    if not user_id:
+        await update.effective_message.reply_text(label)
+        return
+    minutes = config.MUTE_MINUTES
+    for arg in rest:
+        if arg.isdigit():
+            minutes = max(1, min(int(arg), 60 * 24 * 365))
+            break
+    until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=minutes)
     try:
         await ctx.bot.restrict_chat_member(
             chat_id, user_id,
-            permissions=ChatPermissions(
-                can_send_messages=True, can_send_other_messages=True,
-                can_add_web_page_previews=True, can_send_polls=True,
-                can_invite_users=True,
-            ),
-        )
+            permissions=ChatPermissions(can_send_messages=False),
+            until_date=until)
+    except Exception as e:
+        await update.effective_message.reply_text(f"couldn't mute them: {e}")
+        return
+    await update.effective_message.reply_text(
+        f"{label} is muted for {minutes} min. /unmute to lift it early")
+
+
+async def cmd_unmute(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin: /unmute as a reply. Also clears their strikes."""
+    if not await admin_ok(update, ctx):
+        return
+    chat_id = update.effective_chat.id
+    user_id, label, rest = await _target_of(update, ctx)
+    if not user_id:
+        await update.effective_message.reply_text(label)
+        return
+    chat = await ctx.bot.get_chat(chat_id)
+    perms = chat.permissions or ChatPermissions(
+        can_send_messages=True, can_send_other_messages=True,
+        can_add_web_page_previews=True, can_send_polls=True,
+        can_invite_users=True)
+    try:
+        await ctx.bot.restrict_chat_member(chat_id, user_id, permissions=perms)
+    except Exception as e:
+        await update.effective_message.reply_text(f"couldn't unmute them: {e}")
+        return
+    db.clear_strikes(user_id, chat_id)
+    # A pending captcha mute is the other way somebody ends up silenced, and
+    # an admin unmuting them means they are vouched for — so stand the timer
+    # down rather than removing them a minute later.
+    disarm_captcha(ctx, chat_id, user_id)
+    await update.effective_message.reply_text(f"{label} can talk again ✨")
+
+
+async def cmd_warn(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin: /warn as a reply [reason]. A strike without deleting anything."""
+    if not await admin_ok(update, ctx):
+        return
+    chat_id = update.effective_chat.id
+    user_id, label, rest = await _target_of(update, ctx)
+    if not user_id:
+        await update.effective_message.reply_text(label)
+        return
+    reason = " ".join(rest)
+    strikes = db.add_strike(user_id, chat_id,
+                            config.STRIKE_DECAY_HOURS * 3600)
+    tail = f" — {reason}" if reason else ""
+    await update.effective_message.reply_text(
+        f"{label}: strike {strikes} of {config.PROFANITY_STRIKES}{tail}")
+
+
+async def cmd_strikes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin: who's on strikes in this chat."""
+    if not await admin_ok(update, ctx):
+        return
+    chat_id = update.effective_chat.id
+    rows = db.strike_board(chat_id)
+    if not rows:
+        await update.effective_message.reply_text("nobody's on strikes ✨")
+        return
+    now = int(time.time())
+    lines = [f"<b>strikes</b> (forgiven after "
+             f"{config.STRIKE_DECAY_HOURS}h idle)"]
+    for r in rows:
+        who_ = (f"@{r['username']}" if r["username"]
+                else r["first_name"] or f"user {r['user_id']}")
+        hours = (now - (r["last_ts"] or now)) // 3600
+        lines.append(f"• {who_} — {r['count']}, last {hours}h ago")
+    await update.effective_message.reply_text(
+        "\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+async def cmd_del(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin: reply to a message with /del to remove it and the command."""
+    if not await admin_ok(update, ctx):
+        return
+    msg = update.effective_message
+    if not msg.reply_to_message:
+        await msg.reply_text("reply to the message you want gone")
+        return
+    try:
+        await msg.reply_to_message.delete()
+    except Exception as e:
+        await msg.reply_text(f"couldn't delete it: {e}")
+        return
+    try:
+        await msg.delete()
     except Exception:
         pass
+
+
+async def cmd_mod(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin: the moderation cheat sheet, since none of this is discoverable."""
+    if not await admin_ok(update, ctx):
+        return
     await update.effective_message.reply_text(
-        f"{display_name(target.from_user)} is clean, we move on"
-    )
+        "<b>🛡 moderation</b>\n"
+        "most of these work as a reply, or with an @handle / user id\n\n"
+        "/del — delete the message you replied to\n"
+        "/warn [reason] — a strike, nothing deleted\n"
+        "/mute [minutes] — default "
+        f"{config.MUTE_MINUTES}\n"
+        "/unmute — lift a mute and clear their strikes\n"
+        "/ban [reason] · /unban &lt;id&gt;\n"
+        "/forgive — wipe strikes, unmute, clear a pitch flag\n"
+        "/strikes — who's on strikes here\n"
+        "/sweep — remove deleted accounts\n"
+        "/health — what I can and can't do in this group\n\n"
+        f"automatic: scam shield, {config.PROFANITY_STRIKES}-strike language "
+        f"filter, join captcha, impersonator ban",
+        parse_mode=ParseMode.HTML)
+
+
+async def cmd_health(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin: does Homie actually have the rights he needs here?
+
+    The permission that matters is the one you find out about during a raid.
+    This asks Telegram up front.
+    """
+    if not await admin_ok(update, ctx):
+        return
+    chat_id = update.effective_chat.id
+    lines = ["<b>🩺 health</b>"]
+    try:
+        me = await ctx.bot.get_chat_member(chat_id, ctx.bot.id)
+        status = me.status
+        lines.append(f"my role: {status}")
+        if status != "administrator":
+            lines.append("❌ <b>I'm not an admin here</b> — I can't delete "
+                         "anything, mute anyone or run the captcha")
+        else:
+            checks = [
+                ("delete messages", getattr(me, "can_delete_messages", None)),
+                ("ban / remove users", getattr(me, "can_restrict_members", None)),
+                ("invite users", getattr(me, "can_invite_users", None)),
+            ]
+            for label, ok in checks:
+                lines.append(f"{'✅' if ok else '❌'} {label}")
+            if not getattr(me, "can_delete_messages", None):
+                lines.append("\n⚠️ without delete, the shield can spot a scam "
+                             "but can't remove it")
+    except Exception as e:
+        lines.append(f"couldn't read my own permissions: {e}")
+
+    home = db.main_chat(config.MAIN_CHAT_ID)
+    lines.append(f"\nhome chat: <code>{home or 'not set — run /setgroup'}</code>")
+    if home and home != chat_id:
+        lines.append("⚠️ this isn't the home chat — alerts go elsewhere")
+    lines.append(f"founder DM: {'✅' if founder_chat_id() else '❌ DM me once'}")
+    lines.append(f"pinned admins: {len(admins.pinned()) or 'none yet'}")
+    lines.append(f"shield: {'on' if config.SHIELD_ENABLED else 'OFF'} · "
+                 f"captcha: {'on' if config.CAPTCHA_ENABLED else 'OFF'} · "
+                 f"language filter: "
+                 f"{'on' if config.PROFANITY_FILTER else 'OFF'}")
+    if not config.ALLOWED_TG:
+        lines.append("⚠️ ALLOWED_TG is empty — I'd delete our own invite link")
+    await update.effective_message.reply_text(
+        "\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 async def cmd_play(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -385,7 +669,7 @@ async def cmd_scores(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_setgroup(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Admin, run once in the group: teaches Homie which chat is home."""
-    if not is_admin(update):
+    if not await admin_ok(update, ctx):
         return
     chat = update.effective_chat
     if chat.type not in ("group", "supergroup"):
@@ -402,7 +686,7 @@ async def cmd_setgroup(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Admin: is the watcher pointed at the right contract?"""
-    if not is_admin(update):
+    if not await admin_ok(update, ctx):
         return
     msg = await update.effective_message.reply_text("reading the chain…")
     raised = await presale.raised_bnb()
@@ -444,11 +728,33 @@ def founder_chat_id():
 
 
 async def is_chat_admin(ctx, chat_id, user_id):
-    try:
-        member = await ctx.bot.get_chat_member(chat_id, user_id)
-        return member.status in ("administrator", "creator")
-    except Exception:
-        return False
+    return user_id in await admins.chat_admin_ids(ctx, chat_id)
+
+
+NO_PERMS_COOLDOWN = 3600
+
+
+async def warn_no_permission(ctx, chat_id, what):
+    """Tell Fred when Homie is being asked to moderate and cannot.
+
+    A failed delete used to log a line nobody reads and return as though the
+    message were fine. The scam stayed up, the member was never warned, and
+    the one person who could fix the permission had no idea. If Homie can't
+    do his job he has to say so out loud.
+    """
+    key = f"noperm:{chat_id}"
+    now = time.time()
+    if now - ctx.bot_data.get(key, 0) < NO_PERMS_COOLDOWN:
+        return
+    ctx.bot_data[key] = now
+    log.error("missing permission in %s: %s", chat_id, what)
+    await notify_founder(
+        ctx,
+        f"⚠️ <b>I can't moderate {chat_id}</b>\n\n"
+        f"Tried to {what} and Telegram refused. I need <b>Delete messages</b> "
+        f"and <b>Ban users</b> in this group's admin settings — without them "
+        f"the shield can spot a scam but can't remove it.",
+    )
 
 
 async def notify_founder(ctx, text):
@@ -469,24 +775,40 @@ def who(user):
 
 
 async def run_guards(update, ctx) -> bool:
-    """Profanity + marketer checks. Returns True if the message was removed."""
+    """Shield + profanity + marketer checks. True if the message was removed."""
     msg = update.effective_message
     user = update.effective_user
     chat_id = update.effective_chat.id
+    text = body_of(msg)
 
     if is_admin(update) or await is_chat_admin(ctx, chat_id, user.id):
         return False
 
     # --- scam shield: foreign addresses and unapproved links ---
     if config.SHIELD_ENABLED:
-        fake_ca = shield.foreign_addresses(msg.text)
+        fake_ca = shield.foreign_addresses(text)
         links = shield.bad_links(msg, ctx.bot.username)
         if fake_ca or links:
             try:
                 await msg.delete()
             except Exception:
-                log.warning("no delete permission in %s", chat_id)
-                return False
+                # The scam is still sitting in the chat. Say so in the chat,
+                # because a warning members can see is better than nothing,
+                # and get Fred's attention about the missing permission.
+                await warn_no_permission(ctx, chat_id, "delete a scam message")
+                await ctx.bot.send_message(
+                    chat_id,
+                    f"⚠️ do NOT use the address or link {display_name(user)} "
+                    "just posted — it isn't ours and I couldn't remove it. "
+                    "only trust /ca",
+                )
+                await notify_founder(
+                    ctx,
+                    f"🛡 <b>COULD NOT REMOVE</b> a scam message from "
+                    f"{who(user)} — it is still live in the group\n\n"
+                    f"{text[:900]}",
+                )
+                return True
             what = "an address that isn't ours" if fake_ca else "an outside link"
             await ctx.bot.send_message(
                 chat_id,
@@ -496,25 +818,26 @@ async def run_guards(update, ctx) -> bool:
             await notify_founder(
                 ctx,
                 f"🛡 <b>shield removed</b> a message from {who(user)}\n\n"
-                f"{msg.text[:900]}",
+                f"{text[:900]}",
             )
             return True
 
-        if shield.mentions_dm(msg.text, chat_id):
+        if shield.mentions_dm(text, chat_id):
             await ctx.bot.send_message(
                 chat_id, shield.SCAM_WARNING, parse_mode=ParseMode.HTML,
             )
             # don't return — let the message stand, it's a real person asking
 
     # --- cursing ---
-    if config.PROFANITY_FILTER and guard.has_profanity(msg.text):
+    if config.PROFANITY_FILTER and guard.has_profanity(text):
         try:
             await msg.delete()
         except Exception:
-            log.warning("no delete permission in %s", chat_id)
+            await warn_no_permission(ctx, chat_id, "delete a message")
             return False
 
-        strikes = db.add_strike(user.id, chat_id)
+        strikes = db.add_strike(user.id, chat_id,
+                               config.STRIKE_DECAY_HOURS * 3600)
         if strikes >= config.PROFANITY_STRIKES:
             until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(
                 minutes=config.MUTE_MINUTES)
@@ -527,10 +850,11 @@ async def run_guards(update, ctx) -> bool:
                 await ctx.bot.send_message(
                     chat_id,
                     f"{display_name(user)} is on mute for "
-                    f"{config.MUTE_MINUTES} min. third strike",
+                    f"{config.MUTE_MINUTES} min. strike "
+                    f"{config.PROFANITY_STRIKES}",
                 )
             except Exception:
-                log.warning("could not mute %s", user.id)
+                await warn_no_permission(ctx, chat_id, "mute a member")
         else:
             await ctx.bot.send_message(
                 chat_id, f"{display_name(user)} — {random.choice(CURSE_LINES)}"
@@ -538,13 +862,13 @@ async def run_guards(update, ctx) -> bool:
         return True
 
     # --- marketer pitch ---
-    if config.MARKETER_REROUTE and guard.is_marketer_pitch(msg.text):
+    if config.MARKETER_REROUTE and guard.is_marketer_pitch(text):
         try:
             await msg.delete()
         except Exception:
-            pass
+            await warn_no_permission(ctx, chat_id, "delete a pitch")
         db.flag_pitcher(user.id)
-        db.add_lead(user.id, user.username, display_name(user), "group", msg.text)
+        db.add_lead(user.id, user.username, display_name(user), "group", text)
         await ctx.bot.send_message(
             chat_id,
             f'{display_name(user)} — Fred handles all promo and partnership '
@@ -557,11 +881,37 @@ async def run_guards(update, ctx) -> bool:
         await notify_founder(
             ctx,
             f"📣 <b>pitch in the group</b> from {who(user)} — rerouted to DM\n\n"
-            f"{msg.text[:900]}",
+            f"{text[:900]}",
         )
         return True
 
     return False
+
+
+def ai_allowed(ctx, chat_id, user_id) -> bool:
+    """Per-person and per-chat ceiling on AI replies.
+
+    Nothing used to stand between one bored member and the whole Anthropic
+    bill. A floor between a person's replies costs a real conversation
+    nothing — nobody types two questions in the same breath — and the hourly
+    chat cap is there for the day a raid decides to make Homie talk.
+    """
+    now = time.time()
+    if config.AI_USER_COOLDOWN_SEC:
+        key = f"ai_user:{user_id}"
+        if now - ctx.bot_data.get(key, 0) < config.AI_USER_COOLDOWN_SEC:
+            return False
+    if config.AI_CHAT_HOURLY_CAP:
+        hour = int(now // 3600)
+        key = f"ai_chat:{chat_id}:{hour}"
+        used = ctx.bot_data.get(key, 0)
+        if used >= config.AI_CHAT_HOURLY_CAP:
+            log.warning("AI hourly cap reached in %s", chat_id)
+            return False
+        ctx.bot_data[key] = used + 1
+    if config.AI_USER_COOLDOWN_SEC:
+        ctx.bot_data[f"ai_user:{user_id}"] = now
+    return True
 
 
 async def on_private(update, ctx):
@@ -569,10 +919,11 @@ async def on_private(update, ctx):
     msg = update.effective_message
     user = update.effective_user
     chat_id = update.effective_chat.id
+    text = body_of(msg)
 
-    if is_admin(update):
+    if await admin_ok(update, ctx):
         db.kv_set("founder_dm", chat_id)  # so Homie knows where to send leads
-        db.log_message(chat_id, "user", display_name(user), msg.text)
+        db.log_message(chat_id, "user", display_name(user), text)
         answer = await persona.respond_to(chat_id, ctx.bot.first_name,
                                           display_name(user))
         if answer:
@@ -583,14 +934,14 @@ async def on_private(update, ctx):
     pitching = (
         db.is_pitcher(user.id)
         or ctx.user_data.get("pitch_mode")
-        or guard.is_marketer_pitch(msg.text)
+        or guard.is_marketer_pitch(text)
     )
 
     if pitching:
-        db.add_lead(user.id, user.username, display_name(user), "dm", msg.text)
+        db.add_lead(user.id, user.username, display_name(user), "dm", text)
         await notify_founder(
             ctx,
-            f"📬 <b>new pitch</b> from {who(user)}\n\n{msg.text[:2000]}",
+            f"📬 <b>new pitch</b> from {who(user)}\n\n{text[:2000]}",
         )
         await msg.reply_text(
             "got it — passed straight to Fred. he reads every one of these "
@@ -598,7 +949,9 @@ async def on_private(update, ctx):
         )
         return
 
-    db.log_message(chat_id, "user", display_name(user), msg.text)
+    db.log_message(chat_id, "user", display_name(user), text)
+    if not ai_allowed(ctx, chat_id, user.id):
+        return
     answer = await persona.respond_to(chat_id, ctx.bot.first_name,
                                       display_name(user))
     if answer:
@@ -606,9 +959,36 @@ async def on_private(update, ctx):
         await msg.reply_text(answer)
 
 
+async def on_group_pre(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """The shield, running before anything else can claim the message.
+
+    This used to be a call inside on_message, which meant the guards only saw
+    what on_message saw. Anything matched by an earlier handler skipped them
+    entirely — a photo captioned "/submit" went to the art contest handler
+    with its caption unexamined, so a scam link in that caption was never
+    checked. A moderation pass has to be the FIRST thing that looks at a
+    message, not one of several things competing for it.
+    """
+    msg = update.effective_message
+    if not msg or not update.effective_user or not body_of(msg):
+        return
+    try:
+        if await run_guards(update, ctx):
+            raise ApplicationHandlerStop
+    except ApplicationHandlerStop:
+        raise
+    except Exception:
+        # A crash in here must never swallow the message silently or take the
+        # bot down with it.
+        log.exception("guard pass failed")
+
+
 async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
-    if not msg or not msg.text or not update.effective_user:
+    if not msg or not update.effective_user:
+        return
+    text = body_of(msg)
+    if not text:
         return
 
     if update.effective_chat.type == "private":
@@ -621,10 +1001,16 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     db.touch_member(user.id, chat_id, user.username, user.first_name)
 
-    if await run_guards(update, ctx):
+    # The guards already ran, in handler group -1, before anything else saw
+    # this message. See on_group_pre.
+
+    # An edited message has already been through the guards and the Lumens
+    # counter once. Re-running the rest would double-log it and let somebody
+    # farm points by editing the same line over and over.
+    if update.edited_message:
         return
 
-    db.log_message(chat_id, "user", author, msg.text)
+    db.log_message(chat_id, "user", author, text)
 
     # games + Lumens. a winning guess ends the turn here.
     if config.GAMES_ENABLED or config.POINTS_ENABLED:
@@ -634,7 +1020,7 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         except Exception:
             log.exception("community layer failed")
 
-    mentioned = addressed(ctx, msg.text)
+    mentioned = addressed(ctx, text)
     replied_to_bot = bool(
         msg.reply_to_message
         and msg.reply_to_message.from_user
@@ -649,7 +1035,7 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             speak = True
             ctx.bot_data[f"ambient:{chat_id}"] = msg.date.timestamp()
 
-    if not speak:
+    if not speak or not ai_allowed(ctx, chat_id, user.id):
         return
 
     await ctx.bot.send_chat_action(chat_id, ChatAction.TYPING)
@@ -660,9 +1046,14 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 def is_admin_user(user) -> bool:
-    if user.id in config.ADMIN_IDS:
-        return True
-    return bool(user.username) and user.username.lower() in config.ADMIN_USERNAMES
+    """Used on join, where an impersonation ban hangs on the answer.
+
+    A handle claim is enough to be SPARED here but never enough to be
+    obeyed: the worst a false positive does is let a real admin through the
+    impersonation check, and the alternative — banning Fred because he is
+    not pinned yet — is much worse.
+    """
+    return admins.is_admin(user) or admins.claims_admin(user)
 
 
 async def send_welcome(ctx, chat_id, user):
@@ -692,11 +1083,22 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     "bounced an impersonator at the door 🛡 "
                     "reminder fam: the team never DMs first",
                 )
+                # The ban is permanent, so the message that reports it has to
+                # carry the way to undo it. The filter is a heuristic on
+                # display names and it will be wrong sometimes.
                 await notify_founder(
-                    ctx, f"🛡 <b>banned on join</b>: {who(user)} — {reason}",
+                    ctx,
+                    f"🛡 <b>banned on join</b>: {who(user)} — {reason}\n\n"
+                    f"If that was a real member: "
+                    f"<code>/unban {user.id}</code>",
                 )
             except Exception:
-                log.exception("could not ban impersonator %s", user.id)
+                await warn_no_permission(ctx, chat_id, "ban an impersonator")
+                await notify_founder(
+                    ctx,
+                    f"🛡 <b>could not ban</b> a suspected impersonator — "
+                    f"{who(user)} ({reason}) is still in the group",
+                )
             continue
 
         db.touch_member(user.id, chat_id, user.username, user.first_name,
@@ -726,12 +1128,59 @@ async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "so I know you're not a bot",
             reply_markup=button,
         )
-        ctx.job_queue.run_once(
-            job_captcha_timeout, config.CAPTCHA_TIMEOUT_SEC,
-            data={"chat_id": chat_id, "user_id": user.id,
-                  "msg_id": prompt.message_id},
-            name=f"cap:{chat_id}:{user.id}",
-        )
+        arm_captcha(ctx, chat_id, user.id, prompt.message_id,
+                    config.CAPTCHA_TIMEOUT_SEC)
+
+
+# --- captcha state ----------------------------------------------------------
+#
+# A pending captcha is a muted member and a job to un-mute or remove them.
+# The job queue lives in memory, so a restart — a deploy, a crash, the kernel
+# update that needed a reboot — used to drop it and leave that person muted in
+# the group with no button that worked and nobody aware of it. Writing the
+# pending set down means a restart can pick it back up.
+
+CAPTCHA_KEY = "captcha:"
+
+
+def arm_captcha(ctx, chat_id, user_id, msg_id, timeout):
+    db.kv_set(f"{CAPTCHA_KEY}{chat_id}:{user_id}", msg_id)
+    ctx.job_queue.run_once(
+        job_captcha_timeout, timeout,
+        data={"chat_id": chat_id, "user_id": user_id, "msg_id": msg_id},
+        name=f"cap:{chat_id}:{user_id}",
+    )
+
+
+def disarm_captcha(ctx, chat_id, user_id):
+    db.kv_delete(f"{CAPTCHA_KEY}{chat_id}:{user_id}")
+    for job in ctx.job_queue.get_jobs_by_name(f"cap:{chat_id}:{user_id}"):
+        job.schedule_removal()
+
+
+async def restore_captchas(app):
+    """Re-arm any captcha that was pending when we stopped.
+
+    Everyone pending gets a fresh full window rather than being judged on a
+    deadline that expired while Homie was down. The button in the chat still
+    works, so a real person just taps it; a bot that was never going to tap
+    is removed one window later than it would have been. Erring toward the
+    real member is the right way round.
+    """
+    pending = db.kv_prefix(CAPTCHA_KEY)
+    if not pending:
+        return
+    ctx = ContextTypes.DEFAULT_TYPE(application=app)
+    armed = 0
+    for key, msg_id in pending.items():
+        try:
+            chat_id, user_id = key[len(CAPTCHA_KEY):].split(":")
+            arm_captcha(ctx, int(chat_id), int(user_id), int(msg_id),
+                        config.CAPTCHA_TIMEOUT_SEC)
+            armed += 1
+        except (ValueError, TypeError):
+            db.kv_delete(key)
+    log.info("re-armed %s pending captcha(s) after restart", armed)
 
 
 async def on_captcha(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -749,8 +1198,7 @@ async def on_captcha(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception:
         log.exception("captcha: could not lift restriction for %s", target)
 
-    for job in ctx.job_queue.get_jobs_by_name(f"cap:{chat_id}:{target}"):
-        job.schedule_removal()
+    disarm_captcha(ctx, chat_id, target)
     await q.answer("you're in ✨")
     try:
         await q.message.delete()
@@ -761,6 +1209,7 @@ async def on_captcha(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def job_captcha_timeout(ctx: ContextTypes.DEFAULT_TYPE):
     d = ctx.job.data
+    db.kv_delete(f"{CAPTCHA_KEY}{d['chat_id']}:{d['user_id']}")
     try:
         await moderation.kick(ctx.bot, d["chat_id"], d["user_id"])
         db.mark_removed(d["user_id"], d["chat_id"])
@@ -927,10 +1376,19 @@ async def job_countdown(ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def job_sweep(ctx: ContextTypes.DEFAULT_TYPE):
-    if not db.main_chat(config.MAIN_CHAT_ID):
+    chat_id = db.main_chat(config.MAIN_CHAT_ID)
+    if not chat_id:
         return
-    checked, removed = await moderation.sweep(ctx.bot, db.main_chat(config.MAIN_CHAT_ID))
+    checked, removed = await moderation.sweep(ctx.bot, chat_id)
     log.info("sweep: checked %s, removed %s", checked, removed)
+    # This runs unattended every 12 hours and removes people. Removing people
+    # silently is not something a bot should do to somebody else's group.
+    if removed:
+        await notify_founder(
+            ctx,
+            f"🧹 <b>sweep</b>: removed {removed} deleted account(s) "
+            f"from {chat_id} (checked {checked})",
+        )
 
 
 async def job_icebreaker(ctx: ContextTypes.DEFAULT_TYPE):
@@ -1042,6 +1500,7 @@ _APP = None
 async def _post_init(app):
     global _APP
     _APP = app
+    await restore_captchas(app)
     if config.ARCADE_ENABLED:
         app.bot_data["arcade_runner"] = await arcade_server.start_server(
             on_arcade_score)
@@ -1066,6 +1525,13 @@ def main():
            .post_shutdown(_post_shutdown)
            .build())
 
+    # Group -1 runs before every other handler, so the shield sees every
+    # group message — commands and photo captions included — no matter which
+    # handler would otherwise claim it.
+    app.add_handler(MessageHandler(
+        (filters.TEXT | filters.CAPTION) & filters.ChatType.GROUPS,
+        on_group_pre), group=-1)
+
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("presale", cmd_presale))
     app.add_handler(CommandHandler("ca", cmd_ca))
@@ -1079,6 +1545,18 @@ def main():
     app.add_handler(CommandHandler("leads", cmd_leads))
     app.add_handler(CommandHandler("reload", cmd_reload))
     app.add_handler(CommandHandler("forgive", cmd_forgive))
+
+    # manual moderation
+    app.add_handler(CommandHandler("mod", cmd_mod))
+    app.add_handler(CommandHandler("health", cmd_health))
+    app.add_handler(CommandHandler("ban", cmd_ban))
+    app.add_handler(CommandHandler("unban", cmd_unban))
+    app.add_handler(CommandHandler("mute", cmd_mute))
+    app.add_handler(CommandHandler("unmute", cmd_unmute))
+    app.add_handler(CommandHandler("warn", cmd_warn))
+    app.add_handler(CommandHandler("strikes", cmd_strikes))
+    app.add_handler(CommandHandler(["del", "delete"], cmd_del))
+
     app.add_handler(CommandHandler("play", cmd_play))
     app.add_handler(CommandHandler("scores", cmd_scores))
     app.add_handler(CommandHandler("setgroup", cmd_setgroup))
@@ -1094,7 +1572,11 @@ def main():
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_join))
     app.add_handler(CallbackQueryHandler(on_captcha, pattern=r"^cap:"))
     app.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, on_leave))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
+    # CAPTION as well as TEXT. A caption is just text that Telegram filed
+    # under a different attribute, and a fake contract address under a photo
+    # used to bypass every guard because this filter never looked at it.
+    app.add_handler(MessageHandler(
+        (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, on_message))
 
     jq = app.job_queue
     if config.PRESALE_ADDRESS:

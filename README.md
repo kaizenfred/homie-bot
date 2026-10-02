@@ -181,7 +181,21 @@ ban someone for putting "SpreadLight" or "$LIGHT" in their name — that's a fan
 so on, Homie posts the "team never DMs first" warning. Rate-limited to once
 every 10 minutes so it can't be spammed.
 
-You get a private notice for every removal and every ban.
+You get a private notice for every removal and every ban. Impersonator notices
+carry the `/unban <id>` to undo them, because the trigger is a heuristic on
+display names and it will be wrong sometimes.
+
+**What the shield sees.** It runs in handler group `-1`, before any other
+handler can claim the message, and it reads captions as well as text. Both of
+those were bugs once: a fake address under a photo was invisible to it, and a
+photo captioned `/submit` went to the art-contest handler with its caption
+never examined.
+
+**What it deliberately doesn't do.** A bare `word.word` is not treated as a
+domain — Telegram's own link detection decides that, because it carries the
+real TLD list. The regex backstop only fires on text with a scheme, a `www.`
+or a path. Without that, "ok.Thanks" and "no.Im good" were read as links and
+deleted with a public callout, which on phones happens constantly.
 
 ## Join captcha
 
@@ -189,7 +203,52 @@ New members are muted until they tap *i'm human ✨*. Pass → the chat's normal
 permissions come back and Homie welcomes them by name. No tap within 3 minutes
 → removed, prompt deleted. Only the person who joined can press their button.
 
+Pending captchas are written to the database and re-armed on startup, each
+with a fresh window. The job queue is in memory, so before that a restart
+during someone's captcha left them muted in the group permanently, with a
+button that no longer did anything and nobody aware of it.
+
 Admins skip both the captcha and the impersonator check.
+
+## Moderating by hand
+
+The automatic layers catch patterns. They are not a substitute for being able
+to act, or to overrule the bot. `/mod` prints this list in Telegram:
+
+| | |
+|---|---|
+| `/del` | delete the message you replied to |
+| `/warn [reason]` | a strike, nothing deleted |
+| `/mute [minutes]` | default `MUTE_MINUTES` |
+| `/unmute` | lift a mute, clear their strikes, stand down a pending captcha |
+| `/ban [reason]` · `/unban <id>` | |
+| `/forgive` | wipe strikes, unmute, clear a pitch flag |
+| `/strikes` | who's on strikes here |
+| `/health` | what Homie can and can't actually do in this group |
+
+Each takes a reply, an `@handle` or a numeric id. A handle only resolves for
+someone Homie has seen post — the Bot API has no username lookup — and it says
+so rather than failing silently.
+
+**`/health` is the one to run after adding Homie to a group.** It asks Telegram
+what permissions he actually holds. Without *Delete messages* the shield can
+spot a scam and not remove it; it now warns the group and messages you instead
+of logging a line nobody reads.
+
+**Strikes decay** after `STRIKE_DECAY_HOURS` (default 7 days). They used to be
+permanent, so one slip in March left a member a single word from a mute in
+September.
+
+### Admin rights are tied to an id, not a handle
+
+A Telegram username is rented. Change yours and the old handle returns to the
+pool for anyone to claim — and `/say` broadcasts to the whole group, `/leads`
+reads every pitch sent in, `/setgroup` repoints the bot and `/give` mints
+Lumens. So `ADMIN_USERNAMES` is only ever a **claim**: it is honoured once,
+and only if Telegram independently agrees that person administrates the group,
+and then their numeric id is pinned to the database and the handle stops
+mattering. Put your own id in `ADMIN_IDS` (run `/id`) and nothing depends on a
+name at all.
 
 ---
 
@@ -535,6 +594,15 @@ Likely next steps, in the order I'd do them:
 | `/say <msg>` | admin | broadcast to the group |
 | `/leads` | admin | last 10 marketer pitches |
 | `/sweep` | admin | remove deleted accounts now |
-| `/forgive` | admin | clear strikes (reply to someone) |
+| `/mod` | admin | the moderation cheat sheet |
+| `/health` | admin | what Homie can and can't do in this group |
+| `/del` | admin | delete the message you replied to |
+| `/warn [reason]` | admin | a strike, nothing deleted |
+| `/mute [minutes]` · `/unmute` | admin | temporary silence, and lifting it |
+| `/ban [reason]` · `/unban <id>` | admin | remove, and let back in |
+| `/strikes` | admin | who's on strikes here |
+| `/forgive` | admin | clear strikes, unmute, clear a pitch flag |
 | `/reload` | admin | reload word lists |
 | `/id` | admin | chat and user ids |
+
+Moderation commands take a reply, an `@handle` or a numeric id.

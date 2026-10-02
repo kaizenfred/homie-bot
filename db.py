@@ -172,6 +172,22 @@ def kv_set(key, value):
         )
 
 
+def kv_delete(key):
+    with cursor() as c:
+        c.execute("DELETE FROM kv WHERE key=?", (key,))
+
+
+def kv_prefix(prefix):
+    """Every key/value under a prefix. Used to reload state after a restart."""
+    with cursor() as c:
+        rows = c.execute(
+            "SELECT key, value FROM kv WHERE key LIKE ? ESCAPE '\\'",
+            (prefix.replace("\\", "\\\\").replace("%", "\\%")
+                   .replace("_", "\\_") + "%",),
+        ).fetchall()
+    return {r["key"]: r["value"] for r in rows}
+
+
 # --- members ----------------------------------------------------------------
 
 def touch_member(user_id, chat_id, username, first_name, counts=True):
@@ -198,6 +214,31 @@ def active_members(chat_id):
             "SELECT user_id FROM members WHERE chat_id=? AND removed=0", (chat_id,)
         ).fetchall()
     return [r["user_id"] for r in rows]
+
+
+def find_member(handle, chat_id=None):
+    """Look up a member by @handle among the people we've actually seen.
+
+    The Bot API has no username-to-id lookup, so this is the best a bot can
+    do: match against the handles it has recorded. Returns None for anyone
+    who has never posted while Homie was watching.
+    """
+    handle = (handle or "").lstrip("@").lower()
+    if not handle:
+        return None
+    with cursor() as c:
+        if chat_id:
+            row = c.execute(
+                "SELECT * FROM members WHERE LOWER(username)=? AND chat_id=? "
+                "ORDER BY last_seen DESC LIMIT 1", (handle, chat_id)
+            ).fetchone()
+            if row:
+                return dict(row)
+        row = c.execute(
+            "SELECT * FROM members WHERE LOWER(username)=? "
+            "ORDER BY last_seen DESC LIMIT 1", (handle,)
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def mark_removed(user_id, chat_id):
@@ -282,10 +323,20 @@ def recent_messages(chat_id, limit):
 
 # --- strikes ----------------------------------------------------------------
 
-def add_strike(user_id, chat_id):
-    """Bumps and returns the user's strike count for this chat."""
+def add_strike(user_id, chat_id, decay_sec=0):
+    """Bumps and returns the user's strike count for this chat.
+
+    Strikes used to be permanent, so somebody who swore once in March was
+    one slip away from a mute in September. With decay_sec set, a strike
+    older than that window is treated as served and the count restarts.
+    """
     now = int(time.time())
     with cursor() as c:
+        if decay_sec:
+            c.execute(
+                "DELETE FROM strikes WHERE user_id=? AND chat_id=? AND last_ts<?",
+                (user_id, chat_id, now - int(decay_sec)),
+            )
         c.execute(
             """INSERT INTO strikes(user_id, chat_id, count, last_ts)
                VALUES(?,?,1,?)
@@ -299,6 +350,29 @@ def add_strike(user_id, chat_id):
             (user_id, chat_id),
         ).fetchone()
     return row["count"]
+
+
+def get_strikes(user_id, chat_id):
+    with cursor() as c:
+        row = c.execute(
+            "SELECT count, last_ts FROM strikes WHERE user_id=? AND chat_id=?",
+            (user_id, chat_id),
+        ).fetchone()
+    return (row["count"], row["last_ts"]) if row else (0, 0)
+
+
+def strike_board(chat_id, limit=15):
+    with cursor() as c:
+        rows = c.execute(
+            """SELECT s.user_id, s.count, s.last_ts, m.username, m.first_name
+                 FROM strikes s
+                 LEFT JOIN members m
+                   ON m.user_id = s.user_id AND m.chat_id = s.chat_id
+                WHERE s.chat_id=? ORDER BY s.count DESC, s.last_ts DESC
+                LIMIT ?""",
+            (chat_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def clear_strikes(user_id, chat_id):
@@ -324,6 +398,17 @@ def flag_pitcher(user_id):
 
 def is_pitcher(user_id):
     return kv_get(f"pitcher:{user_id}") == "1"
+
+
+def clear_pitcher(user_id):
+    """Undo a pitch flag.
+
+    The flag is sticky by design — a real agency will try again from the same
+    account. But it also meant one false positive from the keyword filter sent
+    somebody to the leads pile permanently: Homie stopped answering them in DM
+    forever and they were never told why. /forgive clears it.
+    """
+    kv_delete(f"pitcher:{user_id}")
 
 
 def recent_leads(limit=10):

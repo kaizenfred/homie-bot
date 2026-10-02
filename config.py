@@ -160,7 +160,19 @@ PROFANITY_FILTER = _bool("PROFANITY_FILTER", True)
 # strikes before a temporary mute
 PROFANITY_STRIKES = _int("PROFANITY_STRIKES", 3)
 MUTE_MINUTES = _int("MUTE_MINUTES", 60)
+# A strike older than this is forgiven automatically. Without it, strikes are
+# permanent and a member who slipped up once months ago sits one word away
+# from a mute forever. 0 disables decay.
+STRIKE_DECAY_HOURS = _int("STRIKE_DECAY_HOURS", 168)   # 7 days
 MARKETER_REROUTE = _bool("MARKETER_REROUTE", True)
+
+# --- AI cost control --------------------------------------------------------
+# Every reply Homie writes costs money, and nothing stopped one member from
+# holding /ask down. Per-person floor between AI replies, in seconds.
+AI_USER_COOLDOWN_SEC = _int("AI_USER_COOLDOWN_SEC", 20)
+# Ceiling on AI replies per chat per hour, as a backstop against a group-wide
+# pile-on. 0 disables it.
+AI_CHAT_HOURLY_CAP = _int("AI_CHAT_HOURLY_CAP", 120)
 
 # --- Storage ----------------------------------------------------------------
 DB_PATH = _raw("DB_PATH", "spreadlight.db")

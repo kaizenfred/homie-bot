@@ -16,6 +16,7 @@ from telegram.ext import (
     CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters,
 )
 
+import admins
 import art
 import config
 import db
@@ -29,13 +30,14 @@ def _name(user):
     return user.first_name or user.username or f"user{user.id}"
 
 
-def _is_admin(update):
-    user = update.effective_user
-    if not user:
-        return False
-    if user.id in config.ADMIN_IDS:
-        return True
-    return bool(user.username) and user.username.lower() in config.ADMIN_USERNAMES
+async def _is_admin(update, ctx):
+    """Same verified check bot.py uses — see admins.py.
+
+    /give mints Lumens and /artend pays out a contest, so this is a real
+    privilege and it must not hang on a Telegram handle anyone can take over
+    once Fred renames himself.
+    """
+    return await admins.verify(ctx, update)
 
 
 def _board_chat(update):
@@ -165,7 +167,7 @@ async def cmd_checkin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_give(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Admin: reply to someone with /give 50 reason"""
-    if not _is_admin(update):
+    if not await _is_admin(update, ctx):
         return
     msg = update.effective_message
     if not msg.reply_to_message or not ctx.args:
@@ -319,7 +321,7 @@ async def cmd_artrules(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_artround(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Admin: /artround [prompt] — blank picks one for you."""
-    if not _is_admin(update):
+    if not await _is_admin(update, ctx):
         return
     prompt = " ".join(ctx.args) or random.choice(art.PROMPTS)
     round_id = art.new_round_id()
@@ -390,7 +392,7 @@ async def on_art_vote(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_artend(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Admin: close the round, pay out, announce."""
-    if not _is_admin(update):
+    if not await _is_admin(update, ctx):
         return
     round_id = db.art_round()
     if not round_id:
