@@ -15,6 +15,7 @@ from telegram import (
     InlineQueryResultGame, Update,
 )
 from telegram.constants import ChatAction, ParseMode
+from telegram.error import Forbidden
 from telegram.ext import (
     Application, CallbackQueryHandler, CommandHandler, ContextTypes,
     InlineQueryHandler,
@@ -91,6 +92,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type == "private":
         if is_admin(update):
             db.kv_set("founder_dm", update.effective_chat.id)
+        if ctx.args and ctx.args[0] == "play":
+            # Arrived from the group's arcade menu, having never opened a
+            # chat with the bot. Drop them straight into the arcade rather
+            # than a greeting they have to read before finding /play again.
+            await cmd_play(update, ctx)
+            return
         if ctx.args and ctx.args[0] == "pitch":
             ctx.user_data["pitch_mode"] = True
             await update.effective_message.reply_text(
@@ -302,22 +309,36 @@ async def cmd_play(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     rows = [[InlineKeyboardButton(title, callback_data=f"arc:{short}")]
             for short, (_, title, _) in arcade_server.GAMES.items()]
     await update.effective_message.reply_text(
-        "🕹 <b>the arcade</b>\npick one — high scores go on the group board",
+        "🕹 <b>the arcade</b>\npick one — I'll send it to your DMs so the chat stays clear. high scores still go on the group board",
         parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(rows))
 
 
 async def on_arcade_pick(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Menu button -> send the actual Telegram game card."""
+    """Menu button -> send that person their own game card, in their DMs.
+
+    The card used to go to the group, so every tap dropped another one into
+    the chat and everybody watched everybody else pick a game. Sending it to
+    the tapper's private chat keeps the group quiet and gives each player
+    their own card — which is also where their own high score belongs.
+    """
     q = update.callback_query
     short = q.data.split(":", 1)[1]
-    await q.answer()
     try:
-        await ctx.bot.send_game(q.message.chat.id, short)
+        await ctx.bot.send_game(q.from_user.id, short)
+    except Forbidden:
+        # They have never opened a chat with the bot, so it may not DM them.
+        # answerCallbackQuery accepts a t.me/<bot>?start= link, which opens
+        # the bot for them — the one URL shape Telegram allows here.
+        handle = ctx.bot.username
+        await q.answer(url=f"https://t.me/{handle}?start=play")
+        return
     except Exception:
         log.exception("send_game failed for %s", short)
-        await ctx.bot.send_message(
-            q.message.chat.id,
-            f"couldn't open {short} — it may not be registered with BotFather yet")
+        await q.answer(
+            f"couldn't open {short} — it may not be registered yet",
+            show_alert=True)
+        return
+    await q.answer("sent to your DMs 🕹")
 
 
 async def on_game_launch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -327,7 +348,12 @@ async def on_game_launch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if short not in arcade_server.GAMES:
         await q.answer("unknown game", show_alert=True)
         return
-    chat_id = q.message.chat.id if q.message else db.main_chat(config.MAIN_CHAT_ID)
+    # The card now lives in the player's DM, but Lumens and the leaderboard
+    # belong to the group. Scoring a run against the private chat would file
+    # it somewhere nobody can see.
+    chat_id = db.main_chat(config.MAIN_CHAT_ID)
+    if q.message and q.message.chat.type != "private":
+        chat_id = q.message.chat.id
     url = arcade_server.play_url(
         q.from_user.id, chat_id, short,
         message_id=q.message.message_id if q.message else None,
