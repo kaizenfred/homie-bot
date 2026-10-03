@@ -34,6 +34,7 @@ import persona
 import points
 import presale
 import shield
+import stickers
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO
@@ -584,6 +585,169 @@ async def cmd_health(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "\n".join(lines), parse_mode=ParseMode.HTML)
 
 
+# --- stickers ---------------------------------------------------------------
+
+EMOJI_RE = re.compile(
+    "[\U0001F000-\U0001FAFF☀-➿⬀-⯿️‍]+")
+
+
+async def _image_bytes(msg, ctx):
+    """The picture attached to a message, whatever shape it arrived in."""
+    src = msg.reply_to_message or msg
+    if src.photo:
+        f = await ctx.bot.get_file(src.photo[-1].file_id)     # biggest size
+    elif src.document and (src.document.mime_type or "").startswith("image/"):
+        f = await ctx.bot.get_file(src.document.file_id)
+    elif src.sticker:
+        f = await ctx.bot.get_file(src.sticker.file_id)
+    else:
+        return None
+    return bytes(await f.download_as_bytearray())
+
+
+async def _make_sticker(update, ctx, kind):
+    """Convert a logo and hand it back ready for @Stickers.
+
+    It does NOT try to push into the community pack, and that's Telegram's
+    rule rather than a shortcut: addStickerToSet is documented as working on
+    "a set created by the bot". t.me/addstickers/SpreadLight was made by a
+    person through @Stickers, so no bot can add to it, ever. What Homie CAN
+    do is the part that's actually fiddly — cutting the background, sizing to
+    exactly 512, and giving the art an outline so it survives both themes —
+    and then hand back a file that @Stickers will accept as-is.
+
+    /sticker own puts it in a second, bot-owned pack instead, for anyone who
+    would rather Homie kept his own.
+    """
+    if not await admin_ok(update, ctx):
+        return
+    msg = update.effective_message
+    if not stickers.available():
+        await msg.reply_text(
+            "I can't process images — Pillow isn't installed yet. On the "
+            "server:\n<code>bash /opt/homie/app/deploy/update.sh</code>",
+            parse_mode=ParseMode.HTML)
+        return
+
+    data = await _image_bytes(msg, ctx)
+    if not data:
+        await msg.reply_text(
+            f"send me a logo, or reply to one, with /{kind}\n\n"
+            "a PNG with transparency is ideal, but a logo on a plain white or "
+            "black card works too — I'll cut the card off.\n"
+            f"<code>/{kind} 🕊</code> sets the emoji · "
+            f"<code>/{kind} square</code> keeps the background · "
+            f"<code>/{kind} own</code> puts it in my own pack",
+            parse_mode=ParseMode.HTML)
+        return
+
+    args = " ".join(ctx.args or [])
+    low = args.lower()
+    faces = EMOJI_RE.findall(args)
+    cut = "never" if "square" in low else "always" if "cut" in low else "auto"
+
+    try:
+        image, note = stickers.to_sticker(data, emoji=(kind == "emoji"),
+                                          cut=cut)
+    except Exception as e:
+        log.exception("sticker conversion failed")
+        await msg.reply_text(f"couldn't convert that one: {e}")
+        return
+
+    if "own" in low:
+        try:
+            await stickers.add_to_pack(ctx.bot, update.effective_user.id,
+                                       image, faces or ["✨"], kind=kind)
+        except Exception as e:
+            log.exception("sticker pack add failed")
+            await msg.reply_text(f"Telegram wouldn't take it: {e}")
+            return
+        link = stickers.pack_link(ctx.bot.username, kind)
+        await msg.reply_text(f"in my own pack ✨ <i>{note}</i>\n{link}",
+                             parse_mode=ParseMode.HTML,
+                             disable_web_page_preview=True)
+        return
+
+    target = stickers.community_pack() or "your pack"
+    await msg.reply_document(
+        document=image,
+        filename=f"{kind}.webp",
+        caption=(f"ready — {stickers.describe(image)}\n<i>{note}</i>\n\n"
+                 f"send this file to @Stickers and pick <b>{target}</b>. "
+                 f"It has to go through @Stickers because a bot can only add "
+                 f"to a pack it made itself.\n\nthen reply to the sticker "
+                 f"here with <code>/stickeruse welcome</code> to put it on a "
+                 f"moment."),
+        parse_mode=ParseMode.HTML)
+
+
+async def cmd_sticker(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin: /sticker [emoji] [square|cut|own] — a logo becomes a sticker."""
+    await _make_sticker(update, ctx, "sticker")
+
+
+async def cmd_emoji(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin: /emoji [emoji] — same, at the 100x100 custom emoji needs."""
+    await _make_sticker(update, ctx, "emoji")
+
+
+async def cmd_stickerpack(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """The community pack. /stickerpack <link> (admin) points me at it."""
+    msg = update.effective_message
+    if ctx.args and await admin_ok(update, ctx):
+        stickers.set_community_pack(ctx.args[0])
+        await msg.reply_text(
+            f"got it — the fam's pack is <b>{stickers.community_pack()}</b>",
+            parse_mode=ParseMode.HTML)
+        return
+
+    lines = ["<b>✨ stickers</b>"]
+    pack = stickers.community_pack()
+    if pack:
+        lines.append(f'<a href="https://t.me/addstickers/{pack}">'
+                     f"t.me/addstickers/{pack}</a>")
+    else:
+        lines.append("<i>no pack set — admins: /stickerpack &lt;link&gt;</i>")
+    if stickers.owner_of("sticker"):
+        lines.append("mine: " + stickers.pack_link(ctx.bot.username))
+
+    assigned = [r for r in stickers.ROLES if stickers.for_role(r)]
+    if assigned:
+        lines.append("\nI use one for: " + ", ".join(assigned))
+    await msg.reply_text("\n".join(lines), parse_mode=ParseMode.HTML,
+                         disable_web_page_preview=True)
+
+
+async def cmd_stickeruse(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin: reply to a sticker with /stickeruse <role> to wire it to a moment."""
+    if not await admin_ok(update, ctx):
+        return
+    msg = update.effective_message
+    role = (ctx.args[0].lower() if ctx.args else "")
+
+    if role not in stickers.ROLES:
+        lines = ["<b>sticker moments</b>"]
+        for name, what in stickers.ROLES.items():
+            mark = "✅" if stickers.for_role(name) else "—"
+            lines.append(f"{mark} <code>{name}</code> — {what}")
+        lines.append("\nreply to a sticker with <code>/stickeruse welcome</code>"
+                     "\n<code>/stickeruse welcome off</code> to clear one")
+        await msg.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+        return
+
+    if len(ctx.args) > 1 and ctx.args[1].lower() in ("off", "none", "clear"):
+        stickers.unassign(role)
+        await msg.reply_text(f"cleared the {role} sticker")
+        return
+
+    if not (msg.reply_to_message and msg.reply_to_message.sticker):
+        await msg.reply_text("reply to the sticker you want for that moment")
+        return
+    stickers.assign(role, msg.reply_to_message.sticker.file_id)
+    await msg.reply_text(f"that's the <b>{role}</b> sticker now — "
+                         f"{stickers.ROLES[role]}", parse_mode=ParseMode.HTML)
+
+
 async def cmd_play(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Post the arcade menu. Each button sends that game's card."""
     if not config.ARCADE_ENABLED:
@@ -1063,6 +1227,7 @@ async def send_welcome(ctx, chat_id, user):
     if text:
         db.log_message(chat_id, "assistant", ctx.bot.first_name, text)
         await ctx.bot.send_message(chat_id, text)
+    await stickers.send(ctx.bot, chat_id, "welcome")
 
 
 async def on_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1268,6 +1433,8 @@ async def post_milestones(ctx, raised, silent=False):
             text.format(raised=raised, soft=config.SOFT_CAP_BNB,
                         hard=config.HARD_CAP_BNB),
         )
+        await stickers.send(ctx.bot, db.main_chat(config.MAIN_CHAT_ID),
+                            "milestone")
 
 
 async def job_presale(ctx: ContextTypes.DEFAULT_TYPE):
@@ -1343,6 +1510,9 @@ async def job_presale(ctx: ContextTypes.DEFAULT_TYPE):
         if line:
             db.log_message(db.main_chat(config.MAIN_CHAT_ID), "assistant", ctx.bot.first_name, line)
             await ctx.bot.send_message(db.main_chat(config.MAIN_CHAT_ID), line)
+        if big:
+            await stickers.send(ctx.bot, db.main_chat(config.MAIN_CHAT_ID),
+                                "biggiver")
 
     await post_milestones(ctx, raised)
 
@@ -1398,6 +1568,7 @@ async def job_icebreaker(ctx: ContextTypes.DEFAULT_TYPE):
     if text:
         db.log_message(db.main_chat(config.MAIN_CHAT_ID), "assistant", ctx.bot.first_name, text)
         await ctx.bot.send_message(db.main_chat(config.MAIN_CHAT_ID), text)
+        await stickers.send(ctx.bot, db.main_chat(config.MAIN_CHAT_ID), "gm")
 
 
 # --- wiring -----------------------------------------------------------------
@@ -1556,6 +1727,17 @@ def main():
     app.add_handler(CommandHandler("warn", cmd_warn))
     app.add_handler(CommandHandler("strikes", cmd_strikes))
     app.add_handler(CommandHandler(["del", "delete"], cmd_del))
+
+    # stickers made from logos
+    app.add_handler(CommandHandler("sticker", cmd_sticker))
+    app.add_handler(CommandHandler("emoji", cmd_emoji))
+    app.add_handler(CommandHandler(["stickerpack", "packs"], cmd_stickerpack))
+    app.add_handler(CommandHandler("stickeruse", cmd_stickeruse))
+    # a logo sent to Homie with "/sticker" as its caption
+    app.add_handler(MessageHandler(
+        filters.PHOTO & filters.CaptionRegex(r"(?i)^/sticker"), cmd_sticker))
+    app.add_handler(MessageHandler(
+        filters.PHOTO & filters.CaptionRegex(r"(?i)^/emoji"), cmd_emoji))
 
     app.add_handler(CommandHandler("play", cmd_play))
     app.add_handler(CommandHandler("scores", cmd_scores))

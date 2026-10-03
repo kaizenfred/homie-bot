@@ -239,6 +239,60 @@ of logging a line nobody reads.
 permanent, so one slip in March left a member a single word from a mute in
 September.
 
+## Stickers from logos
+
+Send Homie a logo and he turns it into something Telegram will accept:
+
+```
+/sticker 🕊            reply to a logo, or caption the logo itself
+/sticker 🕊 square     keep the background instead of cutting it
+/sticker 🕊 own        put it in Homie's own pack rather than handing it back
+/emoji 🕊              the 100x100 a custom emoji needs
+```
+
+He hands the file back, and you forward it to **@Stickers** to add it to the
+community pack. That round trip is Telegram's rule, not a shortcut:
+`addStickerToSet` works on *"a set created by the bot"*, and a pack made by a
+person through @Stickers can never be extended by a bot. What Homie does is
+the fiddly part — background, sizing, outline.
+
+**The conversion.** A logo and a sticker are not the same kind of image. A
+logo arrives on a white card; a sticker has no card, it sits on whatever the
+reader's chat background is. So the card comes off via a flood fill from the
+edges — not a colour key, which would punch holes through white *inside* the
+logo. Then the art gets an outline, light or dark depending on which it
+needs, because once the card is gone a dark logo vanishes on a dark theme and
+about half of Telegram runs dark.
+
+**Knowing when not to cut** is the harder half. A logo on a white card and an
+illustration on a dark gradient both have four corners that agree, so corner
+matching says yes to both — and on the gradient the fill stops wherever the
+tolerance runs out and tears a ragged hole through the artwork. The tell is
+what the fill stops *against*: a real card ends at a hard edge, a gradient
+just drifts. Measured across real inputs, flat cards step 82–107 and
+gradients 39–47 against a tolerance of 38. Below 70 it keeps the square.
+
+### Putting them on moments
+
+```
+/stickerpack <link>    point Homie at the community pack
+/stickeruse            list the moments
+/stickeruse welcome    reply to a sticker to wire it to one
+/stickeruse welcome off
+```
+
+Moments: `welcome` (after the captcha), `milestone` (a cap is crossed),
+`biggiver`, `gm` (the daily post), `hype`. Each is optional and silently does
+nothing until assigned — and a `file_id` works whoever made the pack, so
+these can be stickers from the community's own pack.
+
+**Custom emoji are the exception.** Homie can build an emoji pack and anyone
+with Premium can use it, but a bot may only put custom emoji in *its own*
+messages if it has bought an extra username on Fragment — *"Custom emoji
+entities can only be used by bots that purchased additional usernames on
+Fragment."* Stickers have no such restriction, which is why the sticker half
+is the half wired into his replies.
+
 ### Admin rights are tied to an id, not a handle
 
 A Telegram username is rented. Change yours and the old handle returns to the
@@ -639,6 +693,9 @@ Likely next steps, in the order I'd do them:
 | `/mute [minutes]` · `/unmute` | admin | temporary silence, and lifting it |
 | `/ban [reason]` · `/unban <id>` | admin | remove, and let back in |
 | `/strikes` | admin | who's on strikes here |
+| `/sticker [emoji]` · `/emoji` | admin | a logo becomes a sticker |
+| `/stickerpack [link]` | all | the community pack |
+| `/stickeruse <moment>` | admin | put a sticker on a moment |
 | `/forgive` | admin | clear strikes, unmute, clear a pitch flag |
 | `/reload` | admin | reload word lists |
 | `/id` | admin | chat and user ids |

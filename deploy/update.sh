@@ -31,6 +31,21 @@ else
     git log --oneline "$BEFORE..$AFTER" | sed 's/^/      /'
 fi
 
+echo "==> installing dependencies"
+# A pull can bring a new import with it. Without this the bot comes back up
+# crashing on ModuleNotFoundError, which looks like a broken deploy rather
+# than a missing package — and the restart loop hides the real reason.
+if ! ./.venv/bin/pip install -q -r requirements.txt 2>&1 | tail -5; then
+    echo "    pip failed — the bot may not start. Output above."
+fi
+./.venv/bin/python -c "
+import importlib, sys
+missing = [m for m in ('telegram', 'httpx', 'dotenv', 'anthropic', 'aiohttp', 'PIL')
+           if not importlib.util.find_spec(m)]
+print('    all imports present' if not missing
+      else '    STILL MISSING: ' + ', '.join(missing))
+"
+
 echo "==> restoring ownership"
 # .env keeps its 600; everything else just needs to belong to the service user
 chown -R homie:homie "$APP"
