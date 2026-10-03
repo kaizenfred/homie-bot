@@ -140,6 +140,48 @@ check("white inside the logo survives (no hole punched through)",
 check("the corners really are transparent",
       img.getpixel((2, 2))[3] == 0 and img.getpixel((w - 3, 2))[3] == 0)
 
+# --- shape --------------------------------------------------------------
+# Telegram wants ONE side at exactly 512; the other may be anything up to it.
+# Padding everything into a square wasted most of a wide sticker: a 16:9
+# banner arrived as a strip floating in an otherwise empty frame, using 42%
+# of the image. Keeping the real shape nearly doubles the artwork on screen
+# for the same file.
+wide = png(mark((255, 255, 255, 255), (18, 18, 56, 255)).resize((1200, 500)))
+s, _ = stickers.to_sticker(wide)
+im = Image.open(io.BytesIO(s))
+check("a wide source stays wide, not padded into a square",
+      im.width == 512 and im.height < 460, str(im.size))
+
+tall = png(mark((255, 255, 255, 255), (18, 18, 56, 255)).resize((500, 1200)))
+im = Image.open(io.BytesIO(stickers.to_sticker(tall)[0]))
+check("a tall source stays tall", im.height == 512 and im.width < 460, str(im.size))
+
+# crop is for a SCENE — a wide photo or banner whose subject is in the
+# middle. On a cut-out logo the trim to the artwork's bounding box happens
+# after the crop, so the logo's own shape wins, which is what you'd want.
+scene = jpeg(glow().resize((1200, 500)))
+im = Image.open(io.BytesIO(stickers.to_sticker(scene, crop=True)[0]))
+check("crop squares up a wide scene", im.size == (512, 512), str(im.size))
+im = Image.open(io.BytesIO(stickers.to_sticker(scene)[0]))
+check("…and without it the scene stays wide",
+      im.width == 512 and im.height < 460, str(im.size))
+
+# the emoji is the one that must stay square
+im = Image.open(io.BytesIO(stickers.to_sticker(wide, emoji=True)[0]))
+check("a wide source still makes a square emoji", im.size == (100, 100), str(im.size))
+
+# --- the outline needs room ---------------------------------------------
+# Drawn onto the artwork's own bounding box it is clipped off wherever the
+# art reaches the edge — which, having just been cropped to that bounding
+# box, is all four sides.
+s, _ = stickers.to_sticker(png(mark((0, 0, 0, 255), (255, 255, 255, 255))))
+im = Image.open(io.BytesIO(s)).convert("RGBA")
+bb = im.getchannel("A").getbbox()
+xm = (bb[0] + bb[2]) // 2
+ramp = [im.getpixel((xm, bb[1] + i))[3] for i in range(8)]
+check("the outline fades in rather than starting at full opacity",
+      ramp[0] < 60 and ramp[-1] > ramp[0], f"alpha ramp {ramp}")
+
 # --- pack naming ------------------------------------------------------------
 name = stickers.pack_name("SpreadLightBot")
 check("pack name ends in _by_<bot> as Telegram demands",

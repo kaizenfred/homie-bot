@@ -635,8 +635,12 @@ async def _make_sticker(update, ctx, kind):
             f"send me a logo, or reply to one, with /{kind}\n\n"
             "a PNG with transparency is ideal, but a logo on a plain white or "
             "black card works too — I'll cut the card off.\n"
-            f"<code>/{kind} 🕊</code> sets the emoji · "
-            f"<code>/{kind} square</code> keeps the background · "
+            f"<code>/{kind} 🕊</code> sets the emoji\n"
+            f"<code>/{kind} crop</code> crops to the middle — use it on a "
+            f"wide banner or a big scene, where the subject ends up tiny "
+            f"otherwise\n"
+            f"<code>/{kind} keep</code> keeps the background · "
+            f"<code>/{kind} cut</code> forces it off\n"
             f"<code>/{kind} own</code> puts it in my own pack",
             parse_mode=ParseMode.HTML)
         return
@@ -644,11 +648,11 @@ async def _make_sticker(update, ctx, kind):
     args = " ".join(ctx.args or [])
     low = args.lower()
     faces = EMOJI_RE.findall(args)
-    cut = "never" if "square" in low else "always" if "cut" in low else "auto"
+    cut = "never" if "keep" in low else "always" if "cut" in low else "auto"
 
     try:
         image, note = stickers.to_sticker(data, emoji=(kind == "emoji"),
-                                          cut=cut)
+                                          cut=cut, crop="crop" in low)
     except Exception as e:
         log.exception("sticker conversion failed")
         await msg.reply_text(f"couldn't convert that one: {e}")

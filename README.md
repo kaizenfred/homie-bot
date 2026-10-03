@@ -245,7 +245,10 @@ Send Homie a logo and he turns it into something Telegram will accept:
 
 ```
 /sticker 🕊            reply to a logo, or caption the logo itself
-/sticker 🕊 square     keep the background instead of cutting it
+/sticker 🕊 crop       crop to the middle first — for a wide banner or a
+                       big scene, where the subject ends up tiny otherwise
+/sticker 🕊 keep       keep the background instead of cutting it
+/sticker 🕊 cut        force the background off
 /sticker 🕊 own        put it in Homie's own pack rather than handing it back
 /emoji 🕊              the 100x100 a custom emoji needs
 ```
@@ -263,6 +266,13 @@ edges — not a colour key, which would punch holes through white *inside* the
 logo. Then the art gets an outline, light or dark depending on which it
 needs, because once the card is gone a dark logo vanishes on a dark theme and
 about half of Telegram runs dark.
+
+**Shape.** Telegram wants *one* side at exactly 512; the other can be anything
+up to it. So a sticker keeps the artwork's real proportions instead of being
+padded into a square — padding a 16:9 banner left the strip floating in a
+mostly empty frame using 42% of the image, and the artwork on screen half the
+size it could be. Custom emoji are the exception: those must be exactly
+100×100, so they do get centred on a square.
 
 **Knowing when not to cut** is the harder half. A logo on a white card and an
 illustration on a dark gradient both have four corners that agree, so corner

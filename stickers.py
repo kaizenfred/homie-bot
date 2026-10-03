@@ -187,7 +187,16 @@ def _outline(img, width, colour):
 
 # --- the conversion ---------------------------------------------------------
 
-def to_sticker(data, *, emoji=False, cut="auto", outline="auto", margin=0.07):
+def _centre_square(img):
+    """Crop to the middle square — for a banner whose subject is centred."""
+    w, h = img.size
+    side = min(w, h)
+    return img.crop(((w - side) // 2, (h - side) // 2,
+                     (w - side) // 2 + side, (h - side) // 2 + side))
+
+
+def to_sticker(data, *, emoji=False, cut="auto", outline="auto", margin=0.07,
+               crop=False):
     """Logo bytes in, Telegram-ready WEBP bytes out.
 
     emoji=True gives the exact 100x100 a custom emoji needs; otherwise the
@@ -214,7 +223,10 @@ def to_sticker(data, *, emoji=False, cut="auto", outline="auto", margin=0.07):
     if max(img.size) > box:
         img.thumbnail((box, box), Image.LANCZOS)
 
-    note = "kept square"
+    if crop:
+        img = _centre_square(img)
+
+    note = "kept as-is"
     if cut != "never":
         img, note = _knockout(img, force=(cut == "always"))
 
@@ -223,22 +235,47 @@ def to_sticker(data, *, emoji=False, cut="auto", outline="auto", margin=0.07):
         img = img.crop(bbox)
 
     size = EMOJI_PX if emoji else STICKER_PX
-    pad = max(1, int(size * margin))
-    fit = size - pad * 2
+    ow = max(2, round(size * 0.022))                 # outline width
+    room = ow * 2 + max(1, round(size * margin))     # breathing space
+
+    fit = size - room * 2
     scale = min(fit / img.width, fit / img.height)
     img = img.resize((max(1, round(img.width * scale)),
                       max(1, round(img.height * scale))), Image.LANCZOS)
 
+    # The outline needs somewhere to go. Drawn straight onto the artwork's own
+    # bounding box it gets clipped off wherever the art reaches the edge —
+    # which, since the art was just cropped to its bounding box, is all four
+    # sides. Growing the canvas first is what makes the outline continuous.
+    grown = Image.new("RGBA", (img.width + room * 2, img.height + room * 2),
+                      (0, 0, 0, 0))
+    grown.paste(img, (room, room), img)
+
     if outline and outline != "none":
         colour = ((255, 255, 255) if _mean_luma(img) < 140 else (10, 10, 31)) \
             if outline == "auto" else outline
-        img = _outline(img, max(2, size * 0.022), colour)
+        grown = _outline(grown, ow, colour)
 
-    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    canvas.paste(img, ((size - img.width) // 2, (size - img.height) // 2), img)
+    if emoji:
+        # Custom emoji must be EXACTLY 100x100, so this one is centred.
+        grown.thumbnail((size, size), Image.LANCZOS)
+        canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        canvas.paste(grown, ((size - grown.width) // 2,
+                             (size - grown.height) // 2), grown)
+    else:
+        # A sticker only needs ONE side at exactly 512 — the other may be
+        # anything up to 512. Forcing a square meant a 16:9 banner arrived as
+        # a small strip floating in a mostly empty frame, using 42% of the
+        # sticker. Keeping the real shape makes the artwork nearly twice the
+        # size on screen for the same file.
+        w, h = grown.size
+        if w >= h:
+            canvas = grown.resize((size, max(1, min(size, round(h * size / w)))),
+                                  Image.LANCZOS)
+        else:
+            canvas = grown.resize((max(1, min(size, round(w * size / h))), size),
+                                  Image.LANCZOS)
 
-    # A sticker must be EXACTLY 512 on its long side. Centring on a square
-    # canvas satisfies that for both shapes, and emoji need the square anyway.
     for quality in (95, 88, 80, 70, 60, 50):
         buf = io.BytesIO()
         canvas.save(buf, "WEBP", quality=quality, method=6)
