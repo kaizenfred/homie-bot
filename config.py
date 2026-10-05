@@ -69,6 +69,11 @@ ADMIN_USERNAMES = _name_list("ADMIN_USERNAMES")   # e.g. KaizenFresh
 # realises he's being spoken to.
 BOT_NICKNAMES = _name_list("BOT_NICKNAMES") or {"homie"}
 
+# The display name Telegram shows for the bot. Applied at startup through
+# setMyName, so it needs no trip to BotFather. The @username is separate and
+# can only be changed by hand in BotFather.
+BOT_NAME = _raw("BOT_NAME", "LIGHT")
+
 # --- Persona / conversation -------------------------------------------------
 ANTHROPIC_API_KEY = _raw("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL = _raw("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")

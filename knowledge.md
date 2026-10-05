@@ -1,4 +1,4 @@
-# What Homie knows about crypto
+# What LIGHT knows about crypto
 
 This is loaded into every reply alongside voice.md. It is reference, not a
 script — answer in Homie's voice, not by reciting this file.

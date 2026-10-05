@@ -68,6 +68,16 @@ def body_of(msg) -> str:
 _NAME_RE = None
 
 
+# "light" as a name: at the start of a message ("light, what's the CA?"),
+# after a greeting ("hey light"), or as a vocative at the end ("thoughts,
+# light?"). Never "$LIGHT", "#light", "SpreadLight", or "the light".
+_LIGHT_RE = re.compile(
+    r"(?:^\s*|\b(?:hey|hi|yo|hello|oi|sup|ok|okay|thanks|thx|gm)[ ,]+)"
+    r"light(?![a-z0-9])(?!\s+(?:coin|token|is|was|will|has|team|community|"
+    r"presale|chart|price|holders?|paper|bulb|speed|year))"
+    r"|,\s*light\s*[?!.]*\s*$")
+
+
 def addressed(ctx, text) -> bool:
     """Is Homie being spoken to?
 
@@ -85,6 +95,11 @@ def addressed(ctx, text) -> bool:
         names = set(config.BOT_NICKNAMES)
         if ctx.bot.first_name:
             names.add(ctx.bot.first_name.lower())
+        names.add(config.BOT_NAME.lower())
+        # "light" is also the token, the project and half of every sentence
+        # in this chat, so it only counts when someone is clearly talking TO
+        # him — see _LIGHT_RE. The ordinary name rules below skip it.
+        names.discard("light")
         names = {re.escape(n) for n in names if n}
         # "homie" is ordinary slang in this community. A possessive or
         # determiner in front of it means someone is talking about a mate,
@@ -94,7 +109,7 @@ def addressed(ctx, text) -> bool:
             r"(?<!their )(?<!that )(?<!some )(?<!a )(?<!the )"
             r"(?:" + "|".join(names) + r")(?![a-z0-9])")
             if names else re.compile(r"(?!x)x"))
-    return bool(_NAME_RE.search(low))
+    return bool(_NAME_RE.search(low) or _LIGHT_RE.search(low))
 
 
 def display_name(user) -> str:
@@ -124,7 +139,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     extra = ("\n\n🛡 /mod — moderation commands · /health — my permissions"
              if admins.is_admin(update.effective_user) else "")
     await update.effective_message.reply_text(
-        "yo, I'm Homie ✨ I hang out here.\n\n"
+        "yo, I'm LIGHT ✨ I hang out here.\n\n"
         "/howtobuy — never bought crypto? start here\n"
         "/presale — progress and countdown\n"
         "/ca — official contract addresses\n"
@@ -1676,6 +1691,11 @@ async def _post_init(app):
     global _APP
     _APP = app
     await restore_captchas(app)
+    try:
+        if (await app.bot.get_my_name()).name != config.BOT_NAME:
+            await app.bot.set_my_name(config.BOT_NAME)
+    except Exception as e:      # cosmetic — never block startup over it
+        log.warning("could not set display name: %s", e)
     if config.ARCADE_ENABLED:
         app.bot_data["arcade_runner"] = await arcade_server.start_server(
             on_arcade_score)
