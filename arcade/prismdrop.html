@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Prism Drop</title>
+<link rel="stylesheet" href="sl.css">
+<script src="https://telegram.org/js/games.js"></script>
+</head>
+<body>
+<div id="hud"><span>score <b id="s">0</b></span><span>rows <b id="r">0</b></span><span>level <b id="v">1</b></span></div>
+<canvas id="c" width="360" height="540"></canvas>
+
+<div id="msg">
+  <h1>Prism Drop</h1>
+  <p>Shards of light are falling into the dark. Fill a row and it burns away.<br>
+     Drag to slide, tap to turn, swipe down to drop.<br>
+     Every shard carries one lumen — clear rows full of them for more.</p>
+  <button id="go">start</button>
+</div>
+
+<script src="sl.js"></script>
+<script>
+/* Prism Drop — a falling-block puzzle, built as an original rather than a
+   copy. The genre's mechanic is free to use; a specific game's look is not
+   (Tetris Holding v. Xio, 2012, turned on exactly that: the 10x20 well, the
+   seven four-cell pieces, the ghost piece, the next-piece window). So this
+   one deliberately shares none of those:
+
+     * a 9-wide, 14-deep field of big square cells, sized for a thumb
+     * shards of 2, 3, 4 and 5 cells — not the classic seven
+     * no ghost piece, no preview window
+     * the twist: each shard carries a lumen, and a cleared row pays for
+       every lumen inside it, so where you bury your light matters
+
+   And it follows the arcade's one visual rule: the falling shard is warm
+   (you), everything already set is cold (the city). */
+
+const c = document.getElementById("c"), x = c.getContext("2d");
+const W = c.width, H = c.height;
+SL.fit(c);
+
+const COLS = 9, ROWS = 14, CELL = 36;
+const OX = (W - COLS * CELL) / 2, OY = (H - ROWS * CELL) / 2;
+
+// shard shapes, as [col, row] cells
+const SHAPES = {
+  duo:   [[0, 0], [1, 0]],
+  bar:   [[0, 0], [1, 0], [2, 0]],
+  hook:  [[0, 0], [0, 1], [1, 1]],
+  block: [[0, 0], [1, 0], [0, 1], [1, 1]],
+  vee:   [[0, 0], [0, 1], [0, 2], [1, 2], [2, 2]],
+  cup:   [[0, 0], [2, 0], [0, 1], [1, 1], [2, 1]],
+  star:  [[1, 0], [0, 1], [1, 1], [2, 1], [1, 2]],
+};
+// shuffled bag: small shards come round more often, the star only once
+const BAG = ["duo", "bar", "bar", "hook", "hook", "block", "vee", "cup", "star"];
+
+let grid, piece, bag, score, rows, level, over, fall, lockT, lockMoves, flash, sparks, last;
+
+function reset() {
+  grid = Array.from({ length: ROWS }, () => Array(COLS).fill(null));
+  bag = []; score = 0; rows = 0; level = 1;
+  fall = 0; flash = []; sparks = []; over = false;
+  spawn();
+}
+
+function nextShape() {
+  if (!bag.length) {
+    bag = BAG.slice();
+    for (let i = bag.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [bag[i], bag[j]] = [bag[j], bag[i]];
+    }
+  }
+  return bag.pop();
+}
+
+function spawn() {
+  const cells = SHAPES[nextShape()].map(p => p.slice());
+  const w = Math.max(...cells.map(p => p[0])) + 1;
+  piece = {
+    cells,
+    core: Math.floor(Math.random() * cells.length),   // which cell is the lumen
+    x: Math.floor((COLS - w) / 2),
+    y: 0,
+  };
+  lockT = 0; lockMoves = 0;
+  if (hits(piece.cells, piece.x, piece.y)) return finish();
+}
+
+function hits(cells, px, py) {
+  return cells.some(([cx, cy]) => {
+    const gx = px + cx, gy = py + cy;
+    return gx < 0 || gx >= COLS || gy >= ROWS || (gy >= 0 && grid[gy][gx]);
+  });
+}
+
+function move(dx, dy) {
+  if (hits(piece.cells, piece.x + dx, piece.y + dy)) return false;
+  piece.x += dx; piece.y += dy;
+  if (dx && lockT && lockMoves < 12) { lockT = 0; lockMoves++; }
+  return true;
+}
+
+function turn() {
+  // clockwise about the shard's own box, then nudge sideways if a wall or a
+  // set block is in the way — without the nudge a shard against the edge
+  // simply refuses to turn, which feels like the game ignoring you
+  const h = Math.max(...piece.cells.map(p => p[1])) + 1;
+  const w = Math.max(...piece.cells.map(p => p[0])) + 1;
+  const turned = piece.cells.map(([cx, cy]) => [h - 1 - cy, cx]);
+  const shift = Math.floor((w - h) / 2);
+  for (const k of [0, -1, 1, -2, 2]) {
+    if (!hits(turned, piece.x + shift + k, piece.y)) {
+      piece.cells = turned; piece.x += shift + k;
+      if (lockT && lockMoves < 12) { lockT = 0; lockMoves++; }
+      return;
+    }
+  }
+}
+
+function drop() {
+  let n = 0;
+  while (move(0, 1)) n++;
+  score += n * 2;
+  settle();
+}
+
+function settle() {
+  piece.cells.forEach(([cx, cy], i) => {
+    const gy = piece.y + cy;
+    if (gy >= 0) grid[gy][piece.x + cx] = { core: i === piece.core };
+  });
+  if (piece.cells.some(([, cy]) => piece.y + cy < 0)) return finish();
+
+  const full = [];
+  for (let r = 0; r < ROWS; r++) if (grid[r].every(Boolean)) full.push(r);
+  if (full.length) {
+    const lumens = full.reduce((n, r) => n + grid[r].filter(v => v.core).length, 0);
+    const base = [0, 100, 250, 450, 700, 1000][Math.min(full.length, 5)];
+    score += (base + lumens * 40) * level;
+    rows += full.length;
+    level = Math.min(15, 1 + Math.floor(rows / 8));
+    full.forEach(r => {
+      flash.push({ r, t: 1 });
+      for (let i = 0; i < 10; i++) sparks.push({
+        x: OX + Math.random() * COLS * CELL, y: OY + (r + .5) * CELL,
+        vx: (Math.random() - .5) * 3, vy: -1 - Math.random() * 2.5, t: 1,
+      });
+    });
+    // take the full rows out, top-down so indices stay valid
+    full.forEach(r => { grid.splice(r, 1); grid.unshift(Array(COLS).fill(null)); });
+  }
+  spawn();
+}
+
+/* Gravity: 820ms a row at level 1, down to 110ms at 15. Capped there on
+   purpose — any faster and a shard crosses the field before a thumb can
+   reach it, which stops being a test of anything. */
+const gravity = () => Math.max(110, 820 - (level - 1) * 51);
+
+// --- input: keyboard, and one-thumb touch ---------------------------------
+addEventListener("keydown", e => {
+  if (over) return;
+  const k = e.code;
+  if (k === "ArrowLeft" || k === "KeyA") move(-1, 0);
+  else if (k === "ArrowRight" || k === "KeyD") move(1, 0);
+  else if (k === "ArrowUp" || k === "KeyW" || k === "KeyX") turn();
+  else if (k === "ArrowDown" || k === "KeyS") { if (move(0, 1)) { score += 1; fall = 0; } }
+  else if (k === "Space") drop();
+  else return;
+  e.preventDefault();
+});
+
+/* Touch: the shard follows your thumb sideways a column at a time, a tap
+   that doesn't travel turns it, and a quick pull downward drops it. The
+   drop needs a clearly vertical flick so a sloppy sideways drag never
+   slams a shard into the wrong column. */
+let tStart = null;
+function pt(e) {
+  const r = c.getBoundingClientRect(), t = e.changedTouches ? e.changedTouches[0] : e;
+  return { x: (t.clientX - r.left) * (W / r.width), y: (t.clientY - r.top) * (H / r.height), at: performance.now() };
+}
+c.addEventListener("touchstart", e => {
+  e.preventDefault();
+  if (over) return;
+  const p = pt(e);
+  tStart = { ...p, px: piece.x, moved: false, dropped: false };
+}, { passive: false });
+c.addEventListener("touchmove", e => {
+  e.preventDefault();
+  if (over || !tStart || tStart.dropped) return;
+  const p = pt(e), dx = p.x - tStart.x, dy = p.y - tStart.y;
+  if (Math.hypot(dx, dy) > 10) tStart.moved = true;
+  if (dy > 70 && dy > Math.abs(dx) * 1.6 && p.at - tStart.at < 400) {
+    tStart.dropped = true; drop(); return;
+  }
+  const want = tStart.px + Math.round(dx / CELL);
+  while (piece.x < want && move(1, 0));
+  while (piece.x > want && move(-1, 0));
+}, { passive: false });
+c.addEventListener("touchend", e => {
+  e.preventDefault();
+  if (!over && tStart && !tStart.moved) turn();
+  tStart = null;
+}, { passive: false });
+c.addEventListener("click", () => { if (!over) turn(); });
+
+// --- drawing ---------------------------------------------------------------
+function cell(gx, gy, warm, core, alpha = 1) {
+  const px = OX + gx * CELL, py = OY + gy * CELL, s = CELL - 4;
+  x.save();
+  x.globalAlpha = alpha;
+  if (warm) {
+    x.shadowColor = "#ffa52b"; x.shadowBlur = 14;
+    x.fillStyle = "#ffc93c";
+  } else {
+    x.shadowColor = "#9d4edd"; x.shadowBlur = 6;
+    x.fillStyle = "#2a1d58";
+  }
+  x.beginPath(); x.roundRect(px + 2, py + 2, s, s, 5); x.fill();
+  x.shadowBlur = 0;
+  x.strokeStyle = warm ? "rgba(255,244,207,.75)" : "rgba(25,230,255,.38)";
+  x.lineWidth = 1.2;
+  x.stroke();
+  if (core) {
+    x.shadowColor = "#ffa52b"; x.shadowBlur = warm ? 18 : 12;
+    x.fillStyle = warm ? "#fff4cf" : "#ffc93c";
+    x.beginPath(); x.arc(px + CELL / 2, py + CELL / 2, warm ? 6 : 5, 0, 6.3); x.fill();
+  }
+  x.restore();
+}
+
+function draw() {
+  x.clearRect(0, 0, W, H);
+
+  // the field: faint grid so columns can be judged at a glance
+  x.strokeStyle = "#141838"; x.lineWidth = 1;
+  for (let i = 0; i <= COLS; i++) {
+    x.beginPath(); x.moveTo(OX + i * CELL + .5, OY); x.lineTo(OX + i * CELL + .5, OY + ROWS * CELL); x.stroke();
+  }
+  for (let j = 0; j <= ROWS; j++) {
+    x.beginPath(); x.moveTo(OX, OY + j * CELL + .5); x.lineTo(OX + COLS * CELL, OY + j * CELL + .5); x.stroke();
+  }
+
+  for (let r = 0; r < ROWS; r++)
+    for (let q = 0; q < COLS; q++)
+      if (grid[r][q]) cell(q, r, false, grid[r][q].core);
+
+  // a cleared row leaves a beam behind for a moment
+  flash.forEach(f => {
+    x.save();
+    x.globalAlpha = f.t * .8;
+    x.shadowColor = "#ffc93c"; x.shadowBlur = 30;
+    x.fillStyle = "#fff4cf";
+    x.fillRect(OX, OY + f.r * CELL + CELL * .35, COLS * CELL, CELL * .3 * f.t + 2);
+    x.restore();
+    f.t -= .06;
+  });
+  flash = flash.filter(f => f.t > 0);
+
+  sparks.forEach(p => {
+    x.globalAlpha = p.t; x.fillStyle = "#ffc93c";
+    x.fillRect(p.x, p.y, 2.5, 2.5);
+    p.x += p.vx; p.y += p.vy; p.vy += .08; p.t -= .03;
+  });
+  x.globalAlpha = 1;
+  sparks = sparks.filter(p => p.t > 0);
+
+  if (!over && piece)
+    piece.cells.forEach(([cx, cy], i) => {
+      if (piece.y + cy >= 0) cell(piece.x + cx, piece.y + cy, true, i === piece.core);
+    });
+
+  document.getElementById("s").textContent = score;
+  document.getElementById("r").textContent = rows;
+  document.getElementById("v").textContent = level;
+}
+
+function step(now) {
+  const dt = Math.min(100, now - (last || now));
+  last = now;
+  if (!over) {
+    fall += dt;
+    if (fall >= gravity()) {
+      fall = 0;
+      if (!move(0, 1)) {
+        // grounded: a short grace so a last-moment slide or turn still lands
+        lockT += gravity();
+        if (lockT >= 450) settle();
+      } else lockT = 0;
+    }
+  }
+  draw();
+  requestAnimationFrame(step);
+}
+
+function finish() {
+  over = true;
+  SL.submit(score);
+  const m = document.getElementById("msg");
+  m.innerHTML = `<h1>lights out</h1>
+    <p class="score">${score} points · ${rows} rows</p>
+    <p>your best run is on the group board.</p>
+    <button id="go">again</button>`;
+  m.classList.remove("hide");
+  document.getElementById("go").onclick = start;
+}
+
+function start() {
+  document.getElementById("msg").classList.add("hide");
+  reset();
+}
+
+document.getElementById("go").onclick = start;
+reset(); over = true; requestAnimationFrame(step);
+</script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-"""Generate the three 640x360 cover images BotFather asks for.
+"""Generate the 640x360 cover images BotFather asks for.
 
 Run:  python3 tools/make_game_covers.py [outdir]
 
@@ -218,42 +218,50 @@ def lumen_run():
     return finish(img, "Lumen Run")
 
 
-# --- Light Rally: paddle, ball, rally ---------------------------------------
-def light_rally():
+# --- Prism Drop: a shard falling into the stack --------------------------
+def prism_drop():
     img = base()
     art = Image.new("RGB", img.size, BG)
     d = ImageDraw.Draw(art)
-    horizon(d, 322, NEON, rows=4)
+    horizon(d, 330, NEON, rows=4)
 
-    # brick wall being broken down
-    for row in range(3):
-        for col in range(9):
-            if (row + col) % 4 == 3:
-                continue
-            x = 300 + col * 36
-            y = 170 + row * 22
-            a = 0.85 - row * 0.2
-            d.rounded_rectangle([x * SS, y * SS, (x + 30) * SS, (y + 15) * SS],
-                                radius=4 * SS,
-                                fill=tuple(int(c * a + BG[i] * (1 - a))
-                                           for i, c in enumerate(SHADOW)))
+    C = 26                      # cell size on the cover
+    ox, oy = 330, 112           # field origin, right half of the frame
+    cols, rows = 9, 9
 
-    # the rally line — ball's path, bouncing
-    path = [(120, 300), (250, 212), (330, 262), (448, 196)]
-    for i in range(len(path) - 1):
-        a = 0.2 + 0.8 * (i / max(1, len(path) - 2))
-        d.line([(path[i][0] * SS, path[i][1] * SS),
-                (path[i + 1][0] * SS, path[i + 1][1] * SS)],
-               fill=tuple(int(c * a + BG[j] * (1 - a)) for j, c in enumerate(GLOW)),
-               width=3 * SS)
+    def block(cx, cy, fill, edge, core=False, warm=False):
+        x0, y0 = (ox + cx * C) * SS, (oy + cy * C) * SS
+        d.rounded_rectangle([x0 + 2 * SS, y0 + 2 * SS, x0 + (C - 2) * SS, y0 + (C - 2) * SS],
+                            radius=4 * SS, fill=fill, outline=edge, width=SS)
+        if core:
+            cx, cy = x0 + C * SS // 2, y0 + C * SS // 2
+            r = (5 if warm else 4) * SS
+            # a plain disc: orb()'s falloff rings are blended toward the
+            # background and would punch a dark hole in a lit cell
+            d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=INK if warm else LIGHT)
 
-    orb(d, 448 * SS, 196 * SS, 10 * SS, LIGHT)
+    # the field's frame
+    d.rectangle([ox * SS, oy * SS, (ox + cols * C) * SS, (oy + rows * C) * SS],
+                outline=tuple(int(c * .5) for c in GRID), width=SS)
 
-    d.rounded_rectangle([84 * SS, 306 * SS, 190 * SS, 316 * SS],
-                        radius=5 * SS, fill=LIGHT)
+    # the cold stack — set shards, lumens buried in them
+    stack = ["....##...", "#.####.##", "####.####", "##o######", "###o##o##"]
+    for r, line in enumerate(stack):
+        for q, ch in enumerate(line):
+            if ch != ".":
+                block(q, rows - len(stack) + r, (42, 29, 88),
+                      tuple(int(c * .45) for c in NEON), core=(ch == "o"))
+
+    # a row burning away — the beam
+    by = (oy + (rows - 2) * C + C // 2) * SS
+    d.rectangle([ox * SS, by - 3 * SS, (ox + cols * C) * SS, by + 3 * SS], fill=GLOW)
+
+    # the warm shard, falling into the gap
+    for i, (q, r) in enumerate([(4, 1), (4, 2), (5, 2)]):
+        block(q, r, LIGHT, (255, 244, 207), core=(i == 1), warm=True)
 
     img = lay(img, art)
-    return finish(img, "Light Rally")
+    return finish(img, "Prism Drop")
 
 
 # --- Neon Breach: first person, down the barrel -----------------------------
@@ -343,7 +351,7 @@ if __name__ == "__main__":
     out.mkdir(parents=True, exist_ok=True)
     for name, fn in [("shadowwave", shadow_wave),
                      ("lumenrun", lumen_run),
-                     ("lightrally", light_rally),
+                     ("prismdrop", prism_drop),
                      ("neonbreach", neon_breach)]:
         p = out / f"{name}.png"
         img = fn()

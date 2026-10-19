@@ -99,11 +99,12 @@ echo
 if [ "$PUBLIC" = "ok" ]; then
     echo "arcade is live at ${URL}"
     echo
-    echo "LAST STEP — in BotFather, /newgame three times."
+    echo "LAST STEP — in BotFather, /newgame once per game."
     echo "The short names must match EXACTLY or /play will error:"
     echo "    shadowwave    (title: Shadow Wave)"
     echo "    lumenrun      (title: Lumen Run)"
-    echo "    lightrally    (title: Light Rally)"
+    echo "    prismdrop     (title: Prism Drop)"
+    echo "    neonbreach    (title: Neon Breach)"
     echo "BotFather asks for a title, a description and a 640x360 photo each."
     echo "Then run /play in the group."
 else

@@ -386,7 +386,7 @@ Four original games, built for phones, with group high-score boards.
 |---|---|
 | **Shadow Wave** | fixed shooter — you're the last beacon, shadows descend |
 | **Lumen Run** | maze collector — clear the grid, grab a sunburst and they run from you |
-| **Light Rally** | paddle rally — every return speeds it up |
+| **Prism Drop** | falling blocks — fill a row to burn it away, lumens inside pay extra |
 | **Neon Breach** | first person — a raycast arena, drones closing in, one thumb |
 
 These are originals, not clones. Pac-Man is Bandai Namco's and Space Invaders
@@ -412,14 +412,25 @@ A drone that reaches you costs a light and gets thrown back into the arena
 rather than destroyed, so a wave ends only when you have actually shot
 everything in it.
 
+### Prism Drop
+
+Falling blocks — the genre is free to use, a specific game's look is not.
+*Tetris Holding v. Xio* (2012) was decided on exactly that: the 10×20 well,
+the seven four-cell pieces, the ghost piece and the preview window. Prism Drop
+shares none of them — a 9×14 field of thumb-sized cells, shards of 2 to 5
+cells, no ghost, no preview. Its own twist: every shard carries one lumen, and
+a cleared row pays extra for each lumen inside it.
+
+Drag to slide, tap to turn, flick down to drop. Arrows, up and space on a
+keyboard.
+
 ### Difficulty
 
 All four ramp with the wave or level, and all of them cap. The ceilings are
 deliberate: in Lumen Run the shadows never get faster than 2.3 against the
 runner's 2.4, because a chase you cannot outrun stops being a test of skill;
-in Light Rally the ball stops accelerating at about 11px a frame, past which
-it crosses the paddle between two visible frames and there is nothing left to
-react to.
+in Prism Drop gravity bottoms out at 110ms a row, past which a shard crosses
+the field before a thumb can reach it.
 
 `tests/test_mazes.py` checks that every lumen in Lumen Run and every floor
 tile in Neon Breach can actually be reached. That test exists because 17 of
@@ -455,7 +466,7 @@ ARCADE_URL=https://play.spreadlight.io
 ```
 
 **4. Register each game with BotFather** — `/newgame`, once per game. The
-**short name must match exactly**: `shadowwave`, `lumenrun`, `lightrally`,
+**short name must match exactly**: `shadowwave`, `lumenrun`, `prismdrop`,
 `neonbreach`. BotFather asks for a title, description and photo each time;
 `python3 tools/make_game_covers.py` writes the 640×360 photos it wants.
 

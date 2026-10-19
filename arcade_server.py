@@ -36,7 +36,7 @@ ARCADE_DIR = pathlib.Path(__file__).parent / "arcade"
 GAMES = {
     "shadowwave": ("shadowwave.html", "Shadow Wave", 250_000),
     "lumenrun": ("lumenrun.html", "Lumen Run", 250_000),
-    "lightrally": ("lightrally.html", "Light Rally", 250_000),
+    "prismdrop": ("prismdrop.html", "Prism Drop", 250_000),
     "neonbreach": ("neonbreach.html", "Neon Breach", 250_000),
 }
 
